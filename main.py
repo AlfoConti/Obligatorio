@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from utils.get_type_message import get_message_type
+from utils.send_message import send_message_whatsapp
 
 app = FastAPI()
 
@@ -52,10 +53,11 @@ async def received_message(request: Request):
             message = value["messages"][0]
             # Extrae el número de teléfono del remitente
             number = message["from"]
+            
             print(f"Mensaje recibido de {number}: Tipo: {type_message}, Contenido: {content}")
-
         # Aquí podrías agregar lógica adicional para procesar el mensaje recibido
-        
+        if type_message == "text":
+            send_message_whatsapp(content, number)
         # Es crucial retornar un código HTTP 200 (implícito aquí)
         # o un mensaje de éxito para que Meta no reintente el envío.
         return "EVENT_RECEIVED"
