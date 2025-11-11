@@ -28,3 +28,4 @@ def send_message_whatsapp(text_user, number_user):
     except Exception as exception:
         print(exception)
         return False
+    
