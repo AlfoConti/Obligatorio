@@ -1,8 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from utils.get_type_message import get_message_type
 from utils.send_message import send_message_whatsapp
-import os
-import uvicorn
 
 app = FastAPI()
 
@@ -10,9 +8,8 @@ app = FastAPI()
 def index():
     return {"mensaje": "welcome developer"}
 
-# ⚠️ TOKENES: NO SON LO MISMO
-VERIFY_TOKEN = "mi_token_de_verificacion"  # Token que pones en Meta Developers
-ACCESS_TOKEN = "EAALZCWMF3l0cBP4ZBZCUAZBaHpco2fgDuX76oZCKiEmTFjROjRuV0ZB8rVPkFq9hWkOYgrTzZAr4vx5nQXiDq0YyVt6JrF7qiC6wxFiTHrZB8MF6NpVyFKZC99N1i2w2zZAtYpu6QNxv8lTGTDzDFnZBZC9ZAHZAzB22lgSP4c7omSsNUwYiqN1G6YbMDyAZArSxZAYFgQZDZD"
+# Este token es solo para la verificación inicial del webhook (no es el de envío)
+VERIFY_TOKEN = "EAALZCWMF3l0cBP4ZBZCUAZBaHpco2fgDuX76oZCKiEmTFjROjRuV0ZB8rVPkFq9hWkOYgrTzZAr4vx5nQXiDq0YyVt6JrF7qiC6wxFiTHrZB8MF6NpVyFKZC99N1i2w2zZAtYpu6QNxv8lTGTDzDFnZBZC9ZAHZAzB22lgSP4c7omSsNUwYiqN1G6YbMDyAZArSxZAYFgQZDZD"
 
 @app.get("/whatsapp")
 async def verify_token(request: Request):
@@ -21,40 +18,47 @@ async def verify_token(request: Request):
         verify_token = query_params.get("hub.verify_token")
         challenge = query_params.get("hub.challenge")
 
-        if verify_token == VERIFY_TOKEN:
-            # Devuelve el challenge como texto plano
+        print("🔍 Verificando token del webhook...")
+
+        if verify_token and challenge and verify_token == VERIFY_TOKEN:
+            print("✅ Verificación correcta")
             return int(challenge)
         else:
-            raise HTTPException(status_code=403, detail="Token de verificación inválido")
+            print("❌ Token inválido o faltante")
+            raise HTTPException(status_code=400, detail="Token de verificación inválido o parámetros faltantes")
+
     except Exception as e:
+        print(f"⚠️ Error en la verificación: {e}")
         raise HTTPException(status_code=400, detail=f"Error en la verificación: {e}")
 
 @app.post("/whatsapp")
 async def received_message(request: Request):
     try:
         body = await request.json()
-        entry = body.get("entry", [])[0]
-        changes = entry.get("changes", [])[0]
-        value = changes.get("value", {})
+        print(f"📩 Webhook recibido: {body}")
+
+        entry = body["entry"][0]
+        changes = entry["changes"][0]
+        value = changes["value"]
 
         if "messages" in value and len(value["messages"]) > 0:
             message = value["messages"][0]
             type_message, content = get_message_type(message)
             number = message["from"]
 
-            print(f"Mensaje recibido de {number}: Tipo: {type_message}, Contenido: {content}")
+            print(f"💬 Mensaje recibido de {number}: Tipo={type_message}, Contenido={content}")
 
             if type_message == "text":
-                send_message_whatsapp(content, number)
+                ok = send_message_whatsapp(f"Recibí tu mensaje: {content}", number)
+                print("📤 Mensaje enviado correctamente" if ok else "⚠️ No se pudo enviar el mensaje")
 
         return "EVENT_RECEIVED"
 
     except Exception as e:
-        print(f"Error procesando mensaje: {e}")
-        # Meta requiere siempre 200 aunque haya error
+        print(f"⚠️ Error procesando el mensaje: {e}")
         return "EVENT_RECEIVED"
 
 if __name__ == "__main__":
-    # Render asigna el puerto automáticamente
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    import uvicorn
+    print("🚀 Iniciando servidor FastAPI en puerto 8000...")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
