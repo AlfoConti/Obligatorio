@@ -15,7 +15,7 @@ def generate_data(text_user, number_user):
 def send_message_whatsapp(text_user, number_user):
     try:
         # Se pueden definir en Render → Environment
-        token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "EAALZCWMF3l0cBPxQSYdMDG9TLcrvkM18YFhMr5FnWcGrG16PQ073C8fOerZCHiRi1UR79TeRJDVtjsZCvEo3CkZCtHEMidftoBxxa0IhakfZBSMZBZAHZC6fs6EIe5EdNbsAr8Ep5xDK2Iolzt50tdHZBjAPMo86ZAGAfFJcbgImUa71BAQZCiWbfvY4XZBJ5SFTujPGraGyJYbZBUCI9bYslehfZBIsCatr7rgfwEAQxeLKfvhA1Spi9Ys4RhSELfVZAiqxzaVbFuNrD15eAcXNYpzet1B")
+        token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "EAALZCWMF3l0cBP3inTc96o4MrG2Sq8ExIN7WblqBqFXpdS1Cv9D7Fr7rhijNZCSIIZCREXF8PS40BhTCZA49XyjSoCLhn6PA9G9UKS4cGj5TZCZCVjVIBK8RDqNZCJuNz6Kapnzi79ef9m828YVoYeVBtLcBkIT3YzZCEoYaw15WCD6F6ZC9ysrbZCgJXeEgHnCgZDZD")
         api_url = os.environ.get("WHATSAPP_API_URL", "https://graph.facebook.com/v22.0/846928765173274/messages")
 
         data = generate_data(text_user, number_user)
