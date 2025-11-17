@@ -7,6 +7,9 @@ class Catalog:
 
     @staticmethod
     def load_catalog():
+        if not os.path.exists(DATA_PATH):
+            raise FileNotFoundError(f"❌ No se encontró el archivo del catálogo en: {DATA_PATH}")
+
         with open(DATA_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -19,41 +22,20 @@ class Catalog:
     @staticmethod
     def get_products_by_category(categoria):
         productos = Catalog.load_catalog()
-        return [p for p in productos if p["categoria"].lower() == categoria.lower()]
+        return [
+            p for p in productos
+            if p["categoria"].lower() == categoria.lower()
+        ]
 
     @staticmethod
     def get_product_by_id(product_id):
         productos = Catalog.load_catalog()
         for p in productos:
-            if p["id"] == product_id:
+            if str(p["id"]) == str(product_id):
                 return p
-        return None
+        return None   # importante para evitar errores
 
     @staticmethod
-    def format_category_menu():
-        categorias = Catalog.get_categories()
-
-        mensaje = "📂 *Categorías disponibles:*\n\n"
-        for i, cat in enumerate(categorias, 1):
-            mensaje += f"{i}) {cat}\n"
-
-        mensaje += "\nEnviá el *número* de la categoría."
-        return mensaje
-
-    @staticmethod
-    def format_products_menu(categoria):
-        productos = Catalog.get_products_by_category(categoria)
-
-        if not productos:
-            return "❌ No hay productos en esta categoría."
-
-        mensaje = f"🍽️ *Menú de {categoria}:*\n\n"
-
-        for i, p in enumerate(productos, 1):
-            mensaje += (
-                f"{i}) *{p['nombre']}* - ${p['precio']}\n"
-                f"   _{p['descripcion']}_\n\n"
-            )
-
-        mensaje += "Enviá el *número del producto* para agregar al pedido."
-        return mensaje
+    def get_restaurant_coord():
+        # Coordenadas fijas del restaurante
+        return (-34.9056, -56.1867)
