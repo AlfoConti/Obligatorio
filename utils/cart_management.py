@@ -1,109 +1,96 @@
-# utils/cart_management.py
+# Carrito temporal almacenado en memoria
+# Estructura:
+# carts = {
+#     "5989123456": [
+#         {
+#             "id": "p001",
+#             "name": "Hamburguesa",
+#             "price": 250,
+#             "qty": 2,
+#             "subtotal": 500
+#         }
+#     ]
+# }
+carts = {}
 
-"""
-Carrito en memoria estilo Zustand/Redux.
-Se guarda por número de teléfono.
-
-Estructura interna:
-carritos = {
-   "59891234567": {
-        "items": [
-            {
-               "id": "P23",
-               "nombre": "Hamburguesa completa",
-               "precio": 250,
-               "cantidad": 2,
-               "detalles": "Sin tomate"
-            },
-            {...}
-        ]
-   }
-}
-"""
-
-carritos = {}
+# -------------------------------------------
+# CREAR CARRITO SI NO EXISTE
+# -------------------------------------------
+def ensure_cart(phone):
+    if phone not in carts:
+        carts[phone] = []
 
 
-# ──────────────────────────────────────────────
-# obtener carrito
-# ──────────────────────────────────────────────
-def get_cart(user_phone):
-    if user_phone not in carritos:
-        carritos[user_phone] = {"items": []}
-    return carritos[user_phone]
+# -------------------------------------------
+# AGREGAR PRODUCTO AL CARRITO
+# -------------------------------------------
+def add_to_cart(phone, product, quantity):
+    ensure_cart(phone)
 
-
-# ──────────────────────────────────────────────
-# agregar producto
-# ──────────────────────────────────────────────
-def add_to_cart(user_phone, product_id, nombre, precio, cantidad, detalles=""):
-    cart = get_cart(user_phone)
-
-    # ¿ya existe el producto en el carrito?
-    for item in cart["items"]:
-        if item["id"] == product_id:
-            item["cantidad"] += cantidad
-            if detalles:
-                item["detalles"] = detalles
+    # ¿Existe ya en carrito?
+    for item in carts[phone]:
+        if item["id"] == product["id"]:
+            item["qty"] += quantity
+            item["subtotal"] = item["qty"] * item["price"]
             return
 
-    cart["items"].append({
-        "id": product_id,
-        "nombre": nombre,
-        "precio": precio,
-        "cantidad": cantidad,
-        "detalles": detalles
+    # Si es nuevo
+    carts[phone].append({
+        "id": product["id"],
+        "name": product["name"],
+        "price": product["price"],
+        "qty": quantity,
+        "subtotal": product["price"] * quantity
     })
 
 
-# ──────────────────────────────────────────────
-# quitar producto
-# ──────────────────────────────────────────────
-def remove_from_cart(user_phone, index):
-    cart = get_cart(user_phone)
-    if 0 <= index < len(cart["items"]):
-        cart["items"].pop(index)
+# -------------------------------------------
+# QUITAR PRODUCTO POR ID
+# -------------------------------------------
+def remove_from_cart(phone, product_id):
+    ensure_cart(phone)
+    carts[phone] = [item for item in carts[phone] if item["id"] != product_id]
 
 
-# ──────────────────────────────────────────────
-# vaciar carrito
-# ──────────────────────────────────────────────
-def clear_cart(user_phone):
-    carritos[user_phone] = {"items": []}
+# -------------------------------------------
+# VACIAR CARRITO
+# -------------------------------------------
+def clear_cart(phone):
+    carts[phone] = []
 
 
-# ──────────────────────────────────────────────
-# obtener total
-# ──────────────────────────────────────────────
-def calculate_total(user_phone):
-    cart = get_cart(user_phone)
+# -------------------------------------------
+# OBTENER CARRITO FORMATEADO
+# -------------------------------------------
+def get_cart_summary(phone):
+    ensure_cart(phone)
+
+    if len(carts[phone]) == 0:
+        return "🛒 Tu carrito está vacío."
+
+    text = "🛒 *TU CARRITO*\n\n"
     total = 0
-    for item in cart["items"]:
-        total += item["precio"] * item["cantidad"]
-    return total
+
+    for item in carts[phone]:
+        text += f"• *{item['name']}* x{item['qty']} — ${item['subtotal']}\n"
+        total += item["subtotal"]
+
+    text += f"\n💰 *Total:* ${total}"
+
+    return text
 
 
-# ──────────────────────────────────────────────
-# vista del carrito para enviar al usuario
-# ──────────────────────────────────────────────
-def format_cart(user_phone):
-    cart = get_cart(user_phone)
-    if not cart["items"]:
-        return "🛒 *Tu carrito está vacío*"
+# -------------------------------------------
+# OBTENER CARRITO (SIN FORMATO)
+# -------------------------------------------
+def get_cart_items(phone):
+    ensure_cart(phone)
+    return carts[phone]
 
-    lines = ["🛒 *Carrito actual:*", ""]
 
-    for i, item in enumerate(cart["items"]):
-        subtotal = item["precio"] * item["cantidad"]
-        detalle = f"\n   - _{item['detalles']}_" if item["detalles"] else ""
-        lines.append(
-            f"*{i+1}. {item['nombre']}*\n"
-            f"   Cantidad: {item['cantidad']}\n"
-            f"   Precio c/u: ${item['precio']}\n"
-            f"   Subtotal: *${subtotal}*{detalle}\n"
-        )
-
-    total = calculate_total(user_phone)
-    lines.append(f"*TOTAL A PAGAR: ${total}*")
-
-    return "\n".join(lines)
+# -------------------------------------------
+# OBTENER TOTAL DEL CARRITO
+# -------------------------------------------
+def get_cart_total(phone):
+    ensure_cart(phone)
+    return sum(item["subtotal"] for item in carts[phone])

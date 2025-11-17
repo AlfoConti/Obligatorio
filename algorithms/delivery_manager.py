@@ -1,99 +1,114 @@
-# algorithms/delivery_manager.py
-
-import random
-import string
-
-from structures.data_models import DeliveryOrder
-from structures.trees_and_queues import SimpleQueue
-from utils.geo_calculator import process_location
+import math
+from utils.geo_calculator import calculate_distance_km
+from structures.data_models import Order, DeliveryInfo
 
 
-# ──────────────────────────────────────────────
-# CREACIÓN DE COLAS POR ZONA
-# ──────────────────────────────────────────────
-
-queues = {
-    "NE": SimpleQueue(),
-    "NO": SimpleQueue(),
-    "SE": SimpleQueue(),
-    "SO": SimpleQueue()
-}
-
-
-# ──────────────────────────────────────────────
-# GENERAR CÓDIGO DE PEDIDO (6 caracteres)
-# ──────────────────────────────────────────────
-def generate_order_code():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
-
-# ──────────────────────────────────────────────
-# CREAR PEDIDO Y ENCOLARLO SEGÚN LA ZONA
-# ──────────────────────────────────────────────
-def register_delivery_order(user_id, lat, lon, cart):
+class DeliveryManager:
     """
-    Crea un pedido completo según el carrito actual y la ubicación del usuario.
-
-    Retorna:
-    {
-        "ok": True,
-        "order_code": "AB38F1",
-        "zone": "NE",
-        "time_min": 12,
-        "distance_km": 4.5
-    }
+    Gestiona todo lo relacionado al delivery o retiro en local.
+    Calcula distancias, tiempos estimados y costos.
     """
 
-    if not cart.items:
-        return {"ok": False, "error": "El carrito está vacío."}
+    BASE_DELIVERY_COST = 80
+    COST_PER_KM = 25
+    MAX_DISTANCE_KM = 20
 
-    # 1) Procesar ubicación
-    geo = process_location(lat, lon)
+    def __init__(self):
+        pass
 
-    zone = geo["zone"]
-    time_estimate = geo["time_min"]
-    distance = geo["distance_km"]
+    # -----------------------------------------------------------
+    # ✔ NUEVO: calcular costo + distancia + tiempo (para la UI)
+    # -----------------------------------------------------------
+    def get_delivery_summary(self, user_address: tuple, store_address: tuple):
+        """
+        Retorna un resumen completo para mostrar al usuario:
+        distancia, costo total y tiempo estimado.
+        """
 
-    # 2) Generar código único
-    code = generate_order_code()
+        distance = calculate_distance_km(
+            user_address[0], user_address[1],
+            store_address[0], store_address[1]
+        )
 
-    # 3) Crear objeto de pedido
-    order = DeliveryOrder(
-        user_id=user_id,
-        order_code=code,
-        zone=zone,
-        latitude=lat,
-        longitude=lon,
-        cart_items=cart.items.copy(),
-        total_amount=cart.get_total(),
-        distance_km=distance,
-        estimated_time=time_estimate
-    )
+        if distance > self.MAX_DISTANCE_KM:
+            return {
+                "available": False,
+                "message": f"Lo sentimos 😢 — solo entregamos hasta {self.MAX_DISTANCE_KM} km."
+            }
 
-    # 4) Encolar pedido según zona
-    queues[zone].enqueue(order)
+        cost = self.BASE_DELIVERY_COST + (distance * self.COST_PER_KM)
+        eta = self._estimate_time(distance)
 
-    return {
-        "ok": True,
-        "order_code": code,
-        "zone": zone,
-        "time_min": time_estimate,
-        "distance_km": distance
-    }
+        return {
+            "available": True,
+            "distance_km": round(distance, 2),
+            "cost": round(cost, 2),
+            "eta_minutes": eta
+        }
 
+    # -----------------------------------------------------------
+    # ✔ NUEVO: texto formateado para enviar por WhatsApp
+    # -----------------------------------------------------------
+    def build_delivery_message(self, summary):
+        """
+        Genera el texto que se enviará cuando el usuario seleccione
+        “Confirmar Delivery”.
+        """
+        if not summary["available"]:
+            return summary["message"]
 
-# ──────────────────────────────────────────────
-# OBTENER EL PRÓXIMO PEDIDO DE UNA ZONA ESPECÍFICA
-# (para reportes o para asignar delivery)
-# ──────────────────────────────────────────────
-def get_next_order(zone):
-    if zone not in queues:
-        return None
-    return queues[zone].dequeue()
+        return (
+            f"🚚 *Resumen del Delivery*\n\n"
+            f"📍 Distancia: *{summary['distance_km']} km*\n"
+            f"⏱ Tiempo estimado: *{summary['eta_minutes']} minutos*\n"
+            f"💰 Costo total: *${summary['cost']}*\n\n"
+            f"¿Deseas confirmar tu pedido?"
+        )
 
+    # -----------------------------------------------------------
+    # ✔ NUEVO: procesar confirmación del usuario
+    # -----------------------------------------------------------
+    def confirm_delivery(self, order: Order, summary, address_text):
+        """
+        Retorna toda la info lista para guardar en Order.
+        """
 
-# ──────────────────────────────────────────────
-# OBTENER TODAS LAS COLAS (para reportes globales)
-# ──────────────────────────────────────────────
-def get_all_queues():
-    return queues
+        info = DeliveryInfo(
+            method="delivery",
+            cost=summary["cost"],
+            distance=summary["distance_km"],
+            estimated_time=summary["eta_minutes"],
+            address=address_text
+        )
+
+        order.delivery_info = info
+        return order
+
+    # -----------------------------------------------------------
+    # ✔ Para “Retiro en local”
+    # -----------------------------------------------------------
+    def confirm_store_pickup(self, order: Order):
+        """
+        El usuario retira en local.
+        """
+        info = DeliveryInfo(
+            method="pickup",
+            cost=0,
+            distance=0,
+            estimated_time=5,
+            address="Local principal"
+        )
+
+        order.delivery_info = info
+        return order
+
+    # -----------------------------------------------------------
+    # AUXILIAR: tiempo según distancia
+    # -----------------------------------------------------------
+    def _estimate_time(self, distance_km):
+        """
+        Tiempo estimado basado en distancia.
+        """
+        base_time = 10  # preparación
+        travel_time = distance_km * 4  # minutos por km
+        return int(base_time + travel_time)

@@ -1,144 +1,165 @@
-# main.py
 import os
-import logging
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from utils.send_message import send_whatsapp_message
+from utils.get_type_message import get_message_type
+from utils.cart_management import (
+    add_to_cart, view_cart, confirm_purchase,
+    cancel_purchase
+)
+from algorithms.catalog_logic import get_catalog
+from algorithms.geo_calculator import get_user_location
+from algorithms.delivery_manager import get_nearest_delivery
+
+# ============================
+#  CONFIG
+# ============================
+
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "testtoken")
+WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+
+if not WHATSAPP_PHONE_ID or not WHATSAPP_ACCESS_TOKEN:
+    print("\n⚠ ADVERTENCIA: Variables de entorno de WhatsApp no configuradas.")
+    print("   La app NO enviará mensajes hasta configurarlas en Render.\n")
 
 app = FastAPI()
-logger = logging.getLogger("uvicorn.error")
 
-# --- In-memory store del último mensaje por usuario (teléfono) ---
-# Estructura: { "59891234567": {"raw": <dict>, "text": "...", "type":"text", "received_at": 1234567890} }
-last_messages = {}
 
-# --- Health / root ---
-@app.get("/")
-def root():
-    return {"status": "running", "service": "WhatsApp Webhook - SentinelShield"}
+# ============================
+#        WEBHOOK VERIFY
+# ============================
 
-# --- Endpoint de verificación (Meta) ---
 @app.get("/webhook")
-def verify(hub_mode: str | None = None, hub_challenge: str | None = None, hub_verify_token: str | None = None):
-    """
-    Responde a la verificación de Meta. Si te piden algo distinto, devolvé el challenge.
-    NOTA: Según tus capturas, no usás VERIFY_TOKEN. Si querés validar, compara hub_verify_token.
-    """
-    if hub_challenge:
-        logger.info("Webhook verification request received.")
-        return JSONResponse(content=hub_challenge)
-    return JSONResponse(content={"msg": "Webhook endpoint. Use POST to receive messages."})
+async def verify(request: Request):
+    mode = request.query_params.get("hub.mode")
+    challenge = request.query_params.get("hub.challenge")
+    token = request.query_params.get("hub.verify_token")
 
-# --- Webhook receiver ---
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return int(challenge)
+
+    return JSONResponse(status_code=403, content="Verification failed")
+
+
+# ============================
+#        WEBHOOK POST
+# ============================
+
 @app.post("/webhook")
-async def webhook_receiver(request: Request):
-    """
-    Recibe eventos desde Meta/WhatsApp (entry -> changes -> value -> messages).
-    Guarda el último mensaje por número y responde con un ack.
-    """
+async def webhook(request: Request):
+    data = await request.json()
+
     try:
-        payload = await request.json()
-    except Exception as e:
-        logger.exception("Invalid JSON in webhook: %s", e)
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+        entry = data["entry"][0]["changes"][0]["value"]
+    except Exception:
+        return {"status": "no_whatsapp_event"}
 
-    # Log completo (similar a "All logs" / Live tail)
-    logger.info("Webhook payload received: %s", payload)
+    if "messages" not in entry:
+        return {"status": "ignored_no_messages"}
 
-    # Intentar extraer mensaje según estructura de Meta
-    try:
-        entry = payload.get("entry", [])
-        if not entry:
-            logger.warning("Webhook payload without 'entry'. Ignoring.")
-            return JSONResponse({"status": "ignored"})
+    message = entry["messages"][0]
+    phone_number = entry["metadata"]["phone_number_id"]
+    from_number = message["from"]
 
-        change = entry[0].get("changes", [])[0]
-        value = change.get("value", {})
-        messages = value.get("messages", [])
-        if not messages:
-            # Puede ser otro evento (estatus, mensajes no entregados, etc.)
-            logger.info("No 'messages' in payload's value. Ignoring event.")
-            return JSONResponse({"status": "no_messages"})
+    message_type, content = get_message_type(message)
 
-        msg = messages[0]  # primer mensaje
-        sender = msg.get("from")  # número del usuario (wa_id)
-        msg_type = msg.get("type", "unknown")
+    print("\n===== NUEVO MENSAJE =====")
+    print("Tipo:", message_type)
+    print("Contenido:", content)
 
-        # Extraer texto si está
-        text_body = None
-        if msg_type == "text":
-            text_body = (msg.get("text") or {}).get("body")
-        elif msg_type == "interactive":
-            # interactive puede contener list_reply o button_reply
-            intr = msg.get("interactive", {})
-            itype = intr.get("type")
-            if itype == "list_reply":
-                text_body = intr.get("list_reply", {}).get("title") or intr.get("list_reply", {}).get("id")
-            elif itype == "button_reply":
-                text_body = intr.get("button_reply", {}).get("title") or intr.get("button_reply", {}).get("id")
-            else:
-                # fallback: intentar sacar body
-                text_body = (msg.get("text") or {}).get("body")
-        elif msg_type == "location":
-            loc = msg.get("location", {})
-            text_body = f"LOCATION:{loc.get('latitude')}|{loc.get('longitude')}"
-        elif msg_type == "image" or msg_type == "audio" or msg_type == "video":
-            text_body = f"{msg_type.upper()}_MEDIA:{msg.get(msg_type, {}).get('id')}"
+    # ======================================================
+    #               MANEJO DE BOTONES (POSTBACK)
+    # ======================================================
 
-        # Guardar en memoria el último mensaje para poder reenviarlo
-        last_messages[sender] = {
-            "raw": msg,
-            "text": text_body,
-            "type": msg_type
-        }
+    if message_type == "button":
+        button_id = content
 
-        logger.info("Saved last message for %s — type=%s text=%s", sender, msg_type, text_body)
+        if button_id == "CATALOGO":
+            catalog = get_catalog()
+            send_whatsapp_message(from_number, catalog)
 
-        # ACK a Meta (200) — responder algo simple
-        return JSONResponse({"status": "received"})
+        elif button_id == "VER_CARRITO":
+            msg = view_cart(from_number)
+            send_whatsapp_message(from_number, msg)
 
-    except Exception as e:
-        logger.exception("Error processing webhook payload: %s", e)
-        # devolver 200 a Meta aunque haya error para evitar retries infinitos, pero loguear
-        return JSONResponse({"status": "error", "detail": str(e)})
+        elif button_id == "CONFIRMAR":
+            msg = confirm_purchase(from_number)
+            send_whatsapp_message(from_number, msg)
 
-# --- Endpoint para reenviar el último mensaje recibido al usuario ---
-@app.post("/resend")
-async def resend_last_message(request: Request):
+        elif button_id == "CANCELAR":
+            msg = cancel_purchase(from_number)
+            send_whatsapp_message(from_number, msg)
+
+        elif button_id == "LOCACION":
+            msg = get_user_location(from_number)
+            send_whatsapp_message(from_number, msg)
+
+        elif button_id == "DELIVERY":
+            msg = get_nearest_delivery(from_number)
+            send_whatsapp_message(from_number, msg)
+
+        elif button_id == "AYUDA":
+            send_whatsapp_message(from_number, "📌 *Ayuda disponible*\nElegí una opción del menú.")
+
+        return {"status": "button_processed"}
+
+    # ======================================================
+    #               MANEJO DE TEXTO NORMAL
+    # ======================================================
+
+    if message_type == "text":
+
+        text = content.lower()
+
+        # ------- PALABRAS QUE ABREN EL MENÚ -------
+        if text in ["hola", "menu", "inicio", "ayuda"]:
+            send_menu(from_number)
+            return {"status": "menu_sent"}
+
+        # ------- AGREGAR AL CARRITO -------
+        if text.startswith("agregar "):
+            item = text.replace("agregar ", "")
+            msg = add_to_cart(from_number, item)
+            send_whatsapp_message(from_number, msg)
+            return {"status": "item_added"}
+
+        # Si no matchea nada:
+        send_whatsapp_message(from_number, "No entendí. Escribí *menu* para ver opciones.")
+        return {"status": "unknown_text"}
+
+    return {"status": "unhandled"}
+
+
+# ============================
+#       FUNCIÓN MENÚ
+# ============================
+
+def send_menu(to_number: str):
     """
-    Body JSON esperado:
-      { "to": "59891234567" }
-
-    Reenvía el último texto que ese número envió al bot.
+    Envía los 7 botones principales (tus imágenes exactas).
     """
-    try:
-        body = await request.json()
-        to = body.get("to")
-        if not to:
-            raise HTTPException(status_code=400, detail="Missing 'to' in body.")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="Invalid JSON body.")
 
-    last = last_messages.get(to)
-    if not last:
-        raise HTTPException(status_code=404, detail="No last message for that number.")
+    text = "📋 *Menú principal*\nElegí una opción:"
 
-    # Enviar de vuelta el texto tal como llegó (simula "Reenviar mensaje")
-    text = last.get("text") or "No textual content to resend."
-    try:
-        resp = send_whatsapp_message(to, f"[Reenvío] {text}")
-        logger.info("Re-sent last message to %s. Response: %s", to, resp)
-        return JSONResponse({"status": "resent", "to": to, "message_sent": text, "api_response": resp})
-    except Exception as e:
-        logger.exception("Failed to resend message: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to resend message.")
+    buttons = [
+        {"id": "CATALOGO", "title": "📦 Catálogo"},
+        {"id": "VER_CARRITO", "title": "🛒 Ver carrito"},
+        {"id": "CONFIRMAR", "title": "✅ Confirmar compra"},
+        {"id": "CANCELAR", "title": "❌ Cancelar compra"},
+        {"id": "LOCACION", "title": "📍 Mi ubicación"},
+        {"id": "DELIVERY", "title": "🚚 Delivery más cercano"},
+        {"id": "AYUDA", "title": "❓ Ayuda"}
+    ]
 
-# --- Debug: listar últimos mensajes en memoria
-@app.get("/debug/last_messages")
-def debug_last_messages():
-    """
-    Devuelve un dict con los últimos mensajes guardados por teléfono.
-    Útil para testing y ver exactamente lo que llegó en las capturas.
-    """
-    return last_messages
+    send_whatsapp_message(to_number, text, buttons=buttons)
+
+
+# ============================
+#       SERVIDOR RENDER
+# ============================
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000)

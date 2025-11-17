@@ -1,95 +1,70 @@
-# utils/geo_calculator.py
-
 import math
 
 
-# ──────────────────────────────────────────────
-# COORDENADAS DEL RESTAURANTE
-# (Modificar según ubicación real)
-# ──────────────────────────────────────────────
+# Coordenadas del restaurante (ejemplo)
+# Cambialas por las reales si querés.
 RESTAURANT_LAT = -34.9011
 RESTAURANT_LON = -56.1645
 
 
-# ──────────────────────────────────────────────
-# Haversine: calcula distancia en kilómetros
-# ──────────────────────────────────────────────
+# -----------------------------------------------------------
+# Fórmula de Haversine
+# -----------------------------------------------------------
 def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371  # Radio de la Tierra en km
+    """
+    Calcula la distancia en kilómetros entre dos puntos usando Haversine.
+    """
+    R = 6371  # kilómetros
 
-    lat1_rad = math.radians(lat1)
-    lon1_rad = math.radians(lon1)
-    lat2_rad = math.radians(lat2)
-    lon2_rad = math.radians(lon2)
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
 
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
 
     a = (math.sin(dlat / 2) ** 2 +
-         math.cos(lat1_rad) * math.cos(lat2_rad) *
-         math.sin(dlon / 2) ** 2)
+         math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2)
 
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    c = 2 * math.asin(math.sqrt(a))
 
-    distance = R * c
-    return round(distance, 2)  # km redondeado
+    return R * c  # distancia en KM
 
 
-# ──────────────────────────────────────────────
-# Tiempo estimado según distancia
-# velocidad 30 km/h (delivery)
-# ──────────────────────────────────────────────
-def estimate_time(distance_km):
+# -----------------------------------------------------------
+# Tiempo estimado según velocidad promedio
+# -----------------------------------------------------------
+def calculate_eta(distance_km, speed_kmh=25):
+    """
+    Calcula tiempo estimado en minutos según velocidad promedio.
+    Default: 25 km/h (delivery moto).
+    """
     if distance_km <= 0:
-        return 1  # mínimo 1 minuto
-    # tiempo en minutos
-    time = (distance_km / 30) * 60
-    return round(time)
+        return 5  # mínimo
+
+    hours = distance_km / speed_kmh
+    minutes = int(hours * 60)
+    return max(minutes, 5)
 
 
-# ──────────────────────────────────────────────
-# Clasificar zona del pedido según coordenadas
-# ──────────────────────────────────────────────
-def classify_zone(lat, lon):
+# -----------------------------------------------------------
+# Función principal llamada desde main.py
+# -----------------------------------------------------------
+def process_delivery_coordinates(user_lat, user_lon):
     """
-    Divide la ciudad en 4 zonas a partir del restaurante:
-
-      - NO (Noroeste)
-      - NE (Noreste)
-      - SO (Suroeste)
-      - SE (Sureste)
+    Recibe latitud y longitud del cliente.
+    Devuelve dict con distancia, tiempo estimado y texto.
     """
 
-    north = lat > RESTAURANT_LAT
-    east = lon > RESTAURANT_LON
-
-    if north and east:
-        return "NE"
-    if north and not east:
-        return "NO"
-    if not north and east:
-        return "SE"
-    return "SO"
-
-
-# ──────────────────────────────────────────────
-# Función principal para usar desde main
-# ──────────────────────────────────────────────
-def process_location(user_lat, user_lon):
-    """
-    Devuelve un dict listo para enviar al bot de delivery:
-    {
-       "distance_km": 3.2,
-       "time_min": 7,
-       "zone": "SE"
-    }
-    """
     distance = calculate_distance(RESTAURANT_LAT, RESTAURANT_LON, user_lat, user_lon)
-    time = estimate_time(distance)
-    zone = classify_zone(user_lat, user_lon)
+    eta = calculate_eta(distance)
 
-    return {
-        "distance_km": distance,
-        "time_min": time,
-        "zone": zone
+    result = {
+        "distance_km": round(distance, 2),
+        "eta_minutes": eta,
+        "text": (
+            f"📍 *Ubicación recibida*\n"
+            f"Distancia al restaurante: *{round(distance, 2)} km*\n"
+            f"⏱ Tiempo estimado de entrega: *{eta} minutos*"
+        )
     }
+
+    return result

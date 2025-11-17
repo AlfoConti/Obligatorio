@@ -1,51 +1,77 @@
-# structures/data_models.py
+# models/data_models.py
 
-from dataclasses import dataclass
-
-
-# ──────────────────────────────────────────────
-# ÍTEM DEL CARRITO
-# ──────────────────────────────────────────────
-@dataclass
-class CartItem:
-    id: str          # ID del producto (desde catalog.json)
-    name: str        # Nombre del producto
-    price: float     # Precio unitario
-    quantity: int    # Cantidad seleccionada
-
-    def get_subtotal(self):
-        return round(self.price * self.quantity, 2)
+from pydantic import BaseModel
+from typing import List, Optional
 
 
-# ──────────────────────────────────────────────
-# PEDIDO DE DELIVERY
-# ──────────────────────────────────────────────
-@dataclass
-class DeliveryOrder:
-    user_id: str
-    order_code: str
-    zone: str            # NE / NO / SE / SO
-    latitude: float
-    longitude: float
-    cart_items: list     # lista de CartItem
-    total_amount: float
-    distance_km: float
-    estimated_time: int  # minutos
+# ---------------------------------------------------------
+# ✔ Producto del catálogo
+# ---------------------------------------------------------
+class Product(BaseModel):
+    id: int
+    name: str
+    price: float
+    description: Optional[str] = None
+    stock: int = 0
+    image: Optional[str] = None  # URL de imagen si usas en el frontend
 
-    def summary_text(self):
+
+# ---------------------------------------------------------
+# ✔ Item dentro del carrito
+# ---------------------------------------------------------
+class CartItem(BaseModel):
+    product_id: int
+    quantity: int
+
+
+# ---------------------------------------------------------
+# ✔ Carrito completo del usuario
+# ---------------------------------------------------------
+class Cart(BaseModel):
+    items: List[CartItem] = []
+
+    def total(self, products_dict):
         """
-        Devuelve un texto bonito para enviar al WhatsApp del cliente.
+        Calcula el total utilizando un diccionario:
+        {id_producto: objeto_producto}
         """
-        items_text = "\n".join(
-            [f"- {item.name} x{item.quantity} → ${item.get_subtotal()}"
-             for item in self.cart_items]
-        )
+        total_amount = 0
+        for item in self.items:
+            if item.product_id in products_dict:
+                total_amount += products_dict[item.product_id].price * item.quantity
+        return total_amount
 
-        return (
-            f"🧾 *Resumen del pedido {self.order_code}*\n\n"
-            f"{items_text}\n\n"
-            f"📍 Zona: {self.zone}\n"
-            f"📏 Distancia: {self.distance_km} km\n"
-            f"⏱ Tiempo estimado: {self.estimated_time} min\n"
-            f"💵 Total: ${self.total_amount}"
-        )
+
+# ---------------------------------------------------------
+# ✔ Información de usuario (para pedidos y WhatsApp)
+# ---------------------------------------------------------
+class UserInfo(BaseModel):
+    name: str
+    phone: str  # número formateado para WhatsApp
+    address: Optional[str] = None  # solo si elige delivery
+    email: Optional[str] = None
+
+
+# ---------------------------------------------------------
+# ✔ Tipos de entrega
+# ---------------------------------------------------------
+class DeliveryMethod(BaseModel):
+    """
+    1 → Delivery a domicilio (requiere dirección)
+    2 → Retiro en local
+    """
+    type: int  # 1 = delivery, 2 = pickup
+    address: Optional[str] = None
+
+
+# ---------------------------------------------------------
+# ✔ Pedido / Orden final
+# ---------------------------------------------------------
+class Order(BaseModel):
+    id: int
+    user: UserInfo
+    cart: Cart
+    delivery: DeliveryMethod
+    total: float
+    status: str = "PENDING"  # PENDING / CONFIRMED / CANCELLED
+
