@@ -7,6 +7,7 @@ from utils.send_message import send_whatsapp_message
 from utils.cart_management import CartManager
 from algorithms.catalog_logic import Catalog
 from algorithms.delivery_manager import DeliveryManager
+from algorithms.catalog_logic import Catalog  # noqa: F811
 
 app = FastAPI()
 
