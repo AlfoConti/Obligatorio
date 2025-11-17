@@ -1,64 +1,68 @@
 # utils/cart_management.py
 
-from structures.data_models import CartItem
-
-# Carrito en memoria simple (por user)
-user_carts = {}
+# Diccionario global donde guardamos los carritos por usuario
+carts = {}
 
 
-# ---------------------------------------------------------
-# Obtener carrito del usuario
-# ---------------------------------------------------------
-def get_cart(user_id: str):
-    if user_id not in user_carts:
-        user_carts[user_id] = []
-    return user_carts[user_id]
+def get_cart(user_id):
+    """Devuelve el carrito del usuario, lo crea si no existe."""
+    if user_id not in carts:
+        carts[user_id] = []
+    return carts[user_id]
 
 
-# ---------------------------------------------------------
-# Agregar producto
-# ---------------------------------------------------------
-def add_to_cart(user_id: str, product, qty: int):
+def add_to_cart(user_id, item_name):
+    """Agrega un producto al carrito del usuario."""
+
     cart = get_cart(user_id)
 
+    cart.append({
+        "item": item_name,
+        "quantity": 1
+    })
+
+    return f"🛒 *{item_name}* fue agregado a tu carrito."
+
+
+def view_cart(user_id):
+    """Devuelve el contenido del carrito formateado."""
+
+    cart = get_cart(user_id)
+
+    if not cart:
+        return "📭 *Tu carrito está vacío.*"
+
+    msg = "🛒 *Tu carrito actual:*\n\n"
     for item in cart:
-        if item.product.id == product.id:
-            item.qty += qty
-            return item
+        msg += f"- {item['item']} (x{item['quantity']})\n"
 
-    new_item = CartItem(product=product, qty=qty)
-    cart.append(new_item)
-    return new_item
+    return msg
 
 
-# ---------------------------------------------------------
-# Ver carrito
-# ---------------------------------------------------------
-def view_cart(user_id: str):
-    return get_cart(user_id)
+def confirm_purchase(user_id):
+    """Confirma la compra y limpia el carrito."""
 
-
-# ---------------------------------------------------------
-# Quitar producto
-# ---------------------------------------------------------
-def remove_from_cart(user_id: str, product_id: int):
     cart = get_cart(user_id)
-    new_cart = [item for item in cart if item.product.id != product_id]
-    user_carts[user_id] = new_cart
-    return new_cart
+
+    if not cart:
+        return "📭 No tenés productos en el carrito."
+
+    total_items = len(cart)
+
+    # Vaciar carrito
+    carts[user_id] = []
+
+    return f"🎉 *Compra confirmada*\nSe procesaron *{total_items}* productos. ¡Gracias por tu compra!"
 
 
-# ---------------------------------------------------------
-# Vaciar carrito
-# ---------------------------------------------------------
-def clear_cart(user_id: str):
-    user_carts[user_id] = []
-    return []
+def cancel_purchase(user_id):
+    """Cancela la compra y vacía el carrito."""
 
-
-# ---------------------------------------------------------
-# Calcular total
-# ---------------------------------------------------------
-def get_cart_total(user_id: str):
     cart = get_cart(user_id)
-    return sum(item.product.price * item.qty for item in cart)
+
+    if not cart:
+        return "📭 No tenés ninguna compra en curso."
+
+    carts[user_id] = []
+
+    return "❌ *Compra cancelada.* Tu carrito fue vaciado."
