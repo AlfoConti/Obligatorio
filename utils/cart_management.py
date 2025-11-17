@@ -4,16 +4,15 @@ import random, string
 from utils.geo_calculator import haversine_km
 
 def gen_code(n=6):
-    import random, string
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
 class CartManager:
-    def __init__(self):
-        self.users = {}    # phone -> user-state dict
-        self.orders = {}   # order_id -> order
+    def __init__(self, product_lookup=None):
+        self.users = {}
+        self.orders = {}
         self.order_counter = 1
-        # restaurant coord (ajustar)
         self.restaurant_coord = (-34.9011, -56.1645)
+        self.product_lookup = product_lookup
 
     def create_user_if_not_exists(self, phone):
         if phone not in self.users:
@@ -31,22 +30,13 @@ class CartManager:
     def get_user(self, phone):
         return self.users.get(phone)
 
-    def reset_browse(self, phone):
-        u = self.users[phone]
-        u["page"] = 0
-        u["filter"] = "Todos"
-        u["sort_asc"] = True
-
-    # cart ops
     def add_to_cart(self, phone, product_id, qty, details=""):
-        user = self.users[phone]
-        user["cart"].append({"product_id": product_id, "qty": qty, "details": details})
+        self.users[phone]["cart"].append({"product_id": product_id, "qty": qty, "details": details})
         return True
 
     def remove_from_cart(self, phone, idx):
-        user = self.users[phone]
         try:
-            user["cart"].pop(idx)
+            self.users[phone]["cart"].pop(idx)
             return True
         except Exception:
             return False
@@ -56,26 +46,23 @@ class CartManager:
         lines = []
         tot = 0
         for i, it in enumerate(user["cart"], start=1):
-            pid = it["product_id"]
-            # product lookup will be done by catalog in main flow when formatting
-            price = it.get("price", 0)
+            p = self.product_lookup(it["product_id"]) if self.product_lookup else {"price": 0, "name": f"id{it['product_id']}"}
+            price = p.get("price", 0)
             sub = price * it["qty"]
             tot += sub
-            lines.append(f"{i}) id:{pid} x{it['qty']} = ${sub} ({it['details']})")
+            lines.append(f"{i}) {p.get('name','?')} x{it['qty']} = ${sub} ({it['details']})")
         return ("\n".join(lines), tot)
 
-    def create_order_from_cart(self, phone, lat=None, lon=None, product_lookup=None):
-        # product_lookup: function to get product by id (catalog)
-        user = self.users[phone]
+    def create_order_from_cart(self, phone, lat=None, lon=None):
         order_id = self.order_counter
         self.order_counter += 1
+        user = self.users[phone]
         items = []
         total = 0
         for it in user["cart"]:
-            p = product_lookup(it["product_id"]) if product_lookup else {"price": it.get("price",0)}
-            price = p.get("price", 0)
+            p = self.product_lookup(it["product_id"]) if self.product_lookup else {"price": 0, "name": f"id{it['product_id']}"}
             items.append({"product": p, "qty": it["qty"], "details": it["details"]})
-            total += price * it["qty"]
+            total += p.get("price",0) * it["qty"]
         code = gen_code(6)
         dist = None
         if lat is not None and lon is not None:

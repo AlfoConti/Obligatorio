@@ -1,9 +1,9 @@
 # utils/send_message.py
 import requests
 
-# TOKEN que pediste (está aquí tal cual)
+# token y phone number id reales (ajustados)
 ACCESS_TOKEN = "EAALZCWMF3l0cBP4ZBZCUAZBaHpco2fgDuX76oZCKiEmTFjROjRuV0ZB8rVPkFq9hWkOYgrTzZAr4vx5nQXiDq0YyVt6JrF7qiC6wxFiTHrZB8MF6NpVyFKZC99N1i2w2zZAtYpu6QNxv8lTGTDzDFnZBZC9ZAHZAzB22lgSP4c7omSsNUwYiqN1G6YbMDyAZArSxZAYFgQZDZD"
-PHONE_NUMBER_ID = "491852447346105"  # si usas otra, cambia aquí
+PHONE_NUMBER_ID = "846928765173274"   # <-- ID correcto que recibiste en webhook
 
 META_MESSAGES_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
 
