@@ -1,46 +1,51 @@
-from flask import Flask, request, jsonify
-from utils.send_message import send_whatsapp_message
+from fastapi import FastAPI, HTTPException, Request
 from utils.get_type_message import get_message_type
-
+from utils.send_message import send_message_whatsapp
 import os
 
-app = Flask(__name__)
+app = FastAPI()
 
-# 👉 Token para verificar el webhook con Meta
-VERIFY_TOKEN = "mi_token_verificacion"  # este lo elegís vos (lo ponés también en Meta)
+@app.get("/welcome")
+def index():
+    return {"mensaje": "welcome developer"}
 
-@app.route('/webhook', methods=['GET'])
-def verify_token():
-    token = request.args.get('hub.verify_token')
-    challenge = request.args.get('hub.challenge')
-    if token == VERIFY_TOKEN:
-        return challenge
-    return "Token inválido", 403
+# ⚠️ TOKENES
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "mi_token_de_verificacion")
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
 
+@app.get("/whatsapp")
+async def verify_token(request: Request):
+    query_params = request.query_params
+    verify_token = query_params.get("hub.verify_token")
+    challenge = query_params.get("hub.challenge")
 
-@app.route('/webhook', methods=['POST'])
-def receive_message():
-    data = request.get_json()
-    print("📩 Nuevo mensaje recibido:", data)
-
-    # Verificamos si el mensaje viene en el formato esperado
-    if "entry" in data:
-        for entry in data["entry"]:
-            for change in entry["changes"]:
-                value = change["value"]
-                if "messages" in value:
-                    message = value["messages"][0]
-                    phone_number = value["metadata"]["display_phone_number"]
-                    sender = message["from"]
-                    message_type, message_content = get_message_type(message)
-
-                    print(f"Mensaje de {sender}: {message_content} (tipo: {message_type})")
-
-                    # Ejemplo simple: responder con un texto
-                    send_whatsapp_message(sender, f"Recibí tu mensaje: {message_content}")
-
-    return jsonify({"status": "ok"}), 200
+    if verify_token == VERIFY_TOKEN:
+        return int(challenge)
+    else:
+        raise HTTPException(status_code=403, detail="Token de verificación inválido")
 
 
-if __name__ == '__main__':
-    app.run(debug=True)
+@app.post("/whatsapp")
+async def received_message(request: Request):
+    try:
+        body = await request.json()
+
+        entry = body.get("entry", [{}])[0]
+        changes = entry.get("changes", [{}])[0]
+        value = changes.get("value", {})
+
+        if "messages" in value and len(value["messages"]) > 0:
+            message = value["messages"][0]
+            type_message, content = get_message_type(message)
+            number = message["from"]
+
+            print(f"Mensaje recibido de {number}: Tipo: {type_message}, Contenido: {content}")
+
+            if type_message == "text":
+                send_message_whatsapp(content, number)
+
+        return "EVENT_RECEIVED"
+
+    except Exception as e:
+        print(f"Error procesando mensaje: {e}")
+        return "EVENT_RECEIVED"
