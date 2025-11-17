@@ -1,124 +1,45 @@
-import requests
+# utils/send_message.py
 import os
 import json
+import requests
+import logging
 
-# Token y número del business
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
+logger = logging.getLogger("uvicorn.error")
 
-API_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
+
+if not WHATSAPP_ACCESS_TOKEN or not WHATSAPP_PHONE_ID:
+    logger.warning("WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_ID not set in env variables. Sending will fail until set.")
 
 
-def send_request(payload):
-    """Enviar el mensaje genérico a la API de WhatsApp."""
+def send_whatsapp_message(to_number: str, message_text: str):
+    """
+    Envía un mensaje de texto simple via WhatsApp Cloud API.
+    Retorna la respuesta JSON (o lanza excepción si falla).
+    """
+    if not WHATSAPP_ACCESS_TOKEN or not WHATSAPP_PHONE_ID:
+        logger.error("Missing WhatsApp env vars (ACCESS_TOKEN or PHONE_ID).")
+        raise RuntimeError("WhatsApp env vars missing")
+
+    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_ID}/messages"
     headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json",
+        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+        "Content-Type": "application/json"
     }
-
-    response = requests.post(API_URL, headers=headers, data=json.dumps(payload))
-
-    print("WhatsApp API response:", response.text)
-    return response.json()
-
-
-# ──────────────────────────────────────────────────────
-# MENSAJES DE TEXTO
-# ──────────────────────────────────────────────────────
-def send_text_message(to, message):
     payload = {
         "messaging_product": "whatsapp",
-        "to": to,
+        "to": to_number,
         "type": "text",
-        "text": {"body": message},
-    }
-    return send_request(payload)
-
-
-# ──────────────────────────────────────────────────────
-# MENSAJES CON BOTONES
-# ──────────────────────────────────────────────────────
-def send_button_message(to, body, buttons):
-    """
-    buttons = [
-        {"id": "ACTION1", "title": "Texto"},
-        {"id": "ACTION2", "title": "Texto"}
-    ]
-    """
-    button_objects = [
-        {"type": "reply", "reply": {"id": btn["id"], "title": btn["title"]}}
-        for btn in buttons
-    ]
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {"text": body},
-            "action": {"buttons": button_objects},
-        },
+        "text": {"body": message_text}
     }
 
-    return send_request(payload)
+    logger.info("Sending WhatsApp message to %s: %s", to_number, message_text)
+    r = requests.post(url, headers=headers, data=json.dumps(payload))
+    try:
+        resp = r.json()
+    except Exception:
+        resp = {"status_code": r.status_code, "text": r.text}
 
-
-# ──────────────────────────────────────────────────────
-# LISTAS (CATÁLOGO)
-# ──────────────────────────────────────────────────────
-def send_list_message(to, title, body, sections):
-    """
-    sections = [
-        {
-            "title": "Pizzas",
-            "rows": [
-                {"id": "SHOW_PRODUCT:1", "title": "Muzzarella"},
-                {"id": "SHOW_PRODUCT:2", "title": "Napolitana"}
-            ]
-        }
-    ]
-    """
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "list",
-            "header": {"type": "text", "text": title},
-            "body": {"text": body},
-            "action": {"sections": sections},
-        },
-    }
-    return send_request(payload)
-
-
-# ──────────────────────────────────────────────────────
-# ENVIAR UBICACIÓN
-# ──────────────────────────────────────────────────────
-def send_location_message(to, lat, lon, name="Ubicación", address=""):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "location",
-        "location": {
-            "latitude": lat,
-            "longitude": lon,
-            "name": name,
-            "address": address,
-        },
-    }
-    return send_request(payload)
-
-
-# ──────────────────────────────────────────────────────
-# ENVIAR IMÁGENES (PARA MAPA DE RUTA)
-# ──────────────────────────────────────────────────────
-def send_image_message(to, image_url, caption=""):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "image",
-        "image": {"link": image_url, "caption": caption},
-    }
-    return send_request(payload)
+    logger.info("WhatsApp API response: %s", resp)
+    return resp
