@@ -22,6 +22,14 @@ class Catalog:
         return [p for p in productos if p["categoria"].lower() == categoria.lower()]
 
     @staticmethod
+    def get_product_by_id(product_id):
+        productos = Catalog.load_catalog()
+        for p in productos:
+            if p["id"] == product_id:
+                return p
+        return None
+
+    @staticmethod
     def format_category_menu():
         categorias = Catalog.get_categories()
 
