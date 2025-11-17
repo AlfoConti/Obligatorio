@@ -1,78 +1,99 @@
 # algorithms/delivery_manager.py
-from datetime import datetime, timedelta
-from utils.geo_calculator import haversine_km
+import math
+import random
+from collections import deque
 
 class DeliveryManager:
     def __init__(self, restaurant_coord=(-34.9011, -56.1645)):
-        self.queues = {"NO": [], "NE": [], "SO": [], "SE": []}
-        self.tandas = {}  # id -> dict
-        self.tanda_counter = 1
-        self.deliveries = {}  # id -> {available, phone}
-        self.tanda_queue = []
         self.restaurant_coord = restaurant_coord
+        # four queues for zones: NO, NE, SO, SE
+        self.queues = {
+            "NO": deque(),
+            "NE": deque(),
+            "SO": deque(),
+            "SE": deque()
+        }
+        self.tandas_queue = deque()
+        self.repartidores = []  # list of repartidor dicts {id, state:'available'|'busy', stats...}
+        self.tandas = []  # tandas creadas
 
-    def get_zone(self, lat, lon):
-        rlat, rlon = self.restaurant_coord
-        if lat >= rlat and lon < rlon:
+    def _zone_for_coord(self, lat, lon):
+        lat0, lon0 = self.restaurant_coord
+        # simple quadrant logic
+        if lat >= lat0 and lon < lon0:
             return "NO"
-        if lat >= rlat and lon >= rlon:
+        if lat >= lat0 and lon >= lon0:
             return "NE"
-        if lat < rlat and lon < rlon:
+        if lat < lat0 and lon < lon0:
             return "SO"
         return "SE"
 
     def enqueue_order(self, order):
-        lat, lon = order.get("lat"), order.get("lon")
-        if lat is None or lon is None:
-            return False
-        zone = self.get_zone(lat, lon)
-        self.queues[zone].append(order["id"])
-        return True
+        zone = self._zone_for_coord(order['lat'], order['lon'])
+        self.queues[zone].append(order)
+        return zone
 
-    def check_and_create_tanda_for_zone(self, zone, orders_dict):
+    def process_all_queues_and_create_tandas(self, orders_list=None):
+        """
+        Revisa cada cola; si tiene 7 pedidos o si el primer pedido tiene >45 min (omito tiempo real en el prototipo)
+        crea una tanda. Retorna número de tandas creadas en esta pasada.
+        """
+        created = 0
+        for zone, q in self.queues.items():
+            if len(q) >= 7:
+                self._create_tanda_from_queue(zone)
+                created += 1
+            elif len(q) > 0:
+                # simplified: si hay cualquiera, podemos crear tanda (para demo)
+                self._create_tanda_from_queue(zone)
+                created += 1
+        return created
+
+    def _create_tanda_from_queue(self, zone):
         q = self.queues[zone]
         if not q:
             return None
-        first_order = orders_dict[q[0]]
-        now = datetime.utcnow()
-        if len(q) >= 7 or (now - first_order["created_at"]) > timedelta(minutes=45):
-            take = q[:7]
-            self.queues[zone] = q[len(take):]
-            tid = self.tanda_counter
-            self.tanda_counter += 1
-            self.tandas[tid] = {"orders": take, "delivery_id": None, "created_at": datetime.utcnow(), "route": []}
-            for oid in take:
-                orders_dict[oid]["status"] = "assigned"
-            return tid
-        return None
+        # tomar hasta 7 pedidos
+        items = []
+        for _ in range(min(7, len(q))):
+            items.append(q.popleft())
+        tanda = {
+            "id": len(self.tandas) + 1,
+            "zone": zone,
+            "orders": items,
+            "assigned_to": None,
+            "status": "created"
+        }
+        # asignar repartidor disponible si existe
+        for r in self.repartidores:
+            if r.get("state") == "available":
+                tanda["assigned_to"] = r["id"]
+                r["state"] = "busy"
+                break
+        # si no hay repartidor disponible, encolamos la tanda
+        if tanda["assigned_to"] is None:
+            self.tandas_queue.append(tanda)
+        else:
+            tanda["status"] = "assigned"
+        self.tandas.append(tanda)
+        return tanda
 
-    def process_all_queues_and_create_tandas(self, orders_dict):
-        created = []
-        for z in list(self.queues.keys()):
-            tid = self.check_and_create_tanda_for_zone(z, orders_dict)
-            if tid:
-                created.append(tid)
-                self.assign_tanda_to_delivery(tid, orders_dict)
-        while self.tanda_queue:
-            tid = self.tanda_queue.pop(0)
-            self.assign_tanda_to_delivery(tid, orders_dict)
-        return created
+    # funciones de ayuda para testing
+    def add_repartidor(self, rep_id):
+        self.repartidores.append({"id": rep_id, "state": "available", "delivered": 0, "distance": 0.0})
 
-    def assign_tanda_to_delivery(self, tanda_id, orders_dict):
-        # try find available delivery
-        for did, d in self.deliveries.items():
-            if d.get("available", True):
-                d["available"] = False
-                d["assigned_tanda_id"] = tanda_id
-                self.tandas[tanda_id]["delivery_id"] = did
-                order_ids = self.tandas[tanda_id]["orders"]
-                order_ids_sorted = sorted(order_ids, key=lambda oid: orders_dict[oid].get("distance_km", 0))
-                self.tandas[tanda_id]["route"] = order_ids_sorted
-                return did
-        self.tanda_queue.append(tanda_id)
-        return None
-
-    def register_delivery(self, phone):
-        did = len(self.deliveries) + 1
-        self.deliveries[did] = {"available": True, "phone": phone, "assigned_tanda_id": None}
-        return did
+    def assign_queued_tandas(self):
+        # intentar asignar tandas en espera a repartidores (incluso ocupados en tu lógica original, aquí asigna solo a available)
+        assigned = 0
+        for _ in range(len(self.tandas_queue)):
+            tanda = self.tandas_queue.popleft()
+            for r in self.repartidores:
+                if r["state"] == "available":
+                    tanda["assigned_to"] = r["id"]
+                    tanda["status"] = "assigned"
+                    r["state"] = "busy"
+                    assigned += 1
+                    break
+            if tanda["assigned_to"] is None:
+                self.tandas_queue.append(tanda)
+        return assigned

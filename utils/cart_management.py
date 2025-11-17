@@ -1,84 +1,84 @@
 # utils/cart_management.py
-from datetime import datetime
-import random, string
-from utils.geo_calculator import haversine_km
+import random
+import math
+import time
 
-def gen_code(n=6):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    from math import radians, sin, cos, sqrt, atan2
+    rlat1, rlon1, rlat2, rlon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = rlat2 - rlat1
+    dlon = rlon2 - rlon1
+    a = sin(dlat/2)**2 + cos(rlat1)*cos(rlat2)*sin(dlon/2)**2
+    c = 2*atan2(sqrt(a), sqrt(1-a))
+    return R * c
 
 class CartManager:
-    def __init__(self, product_lookup=None):
-        self.users = {}
-        self.orders = {}
-        self.order_counter = 1
-        self.restaurant_coord = (-34.9011, -56.1645)
+    def __init__(self, product_lookup):
+        # product_lookup: función(product_id) -> producto dict
         self.product_lookup = product_lookup
+        self.users = {}  # phone -> state dict
+        self.orders = []  # lista de órdenes creadas
 
     def create_user_if_not_exists(self, phone):
         if phone not in self.users:
             self.users[phone] = {
-                "created_at": datetime.utcnow(),
+                "phone": phone,
+                "cart": [],  # list of {product_id, qty, details}
                 "state": "idle",
                 "page": 0,
-                "filter": "Todos",
+                "filter": None,
                 "sort_asc": True,
-                "cart": [],
-                "temp_selection": None,
-                "last_location": None
             }
 
     def get_user(self, phone):
-        return self.users.get(phone)
+        self.create_user_if_not_exists(phone)
+        return self.users[phone]
 
     def add_to_cart(self, phone, product_id, qty, details=""):
-        self.users[phone]["cart"].append({"product_id": product_id, "qty": qty, "details": details})
+        self.create_user_if_not_exists(phone)
+        prod = self.product_lookup(product_id)
+        if not prod:
+            return False
+        self.users[phone]['cart'].append({"product": prod, "qty": int(qty), "details": details})
         return True
 
-    def remove_from_cart(self, phone, idx):
-        try:
-            self.users[phone]["cart"].pop(idx)
-            return True
-        except Exception:
-            return False
-
     def cart_summary(self, phone):
-        user = self.users[phone]
+        u = self.get_user(phone)
         lines = []
-        tot = 0
-        for i, it in enumerate(user["cart"], start=1):
-            p = self.product_lookup(it["product_id"]) if self.product_lookup else {"price": 0, "name": f"id{it['product_id']}"}
-            price = p.get("price", 0)
-            sub = price * it["qty"]
-            tot += sub
-            lines.append(f"{i}) {p.get('name','?')} x{it['qty']} = ${sub} ({it['details']})")
-        return ("\n".join(lines), tot)
+        total = 0.0
+        for idx, item in enumerate(u['cart'], start=1):
+            sub = float(item['product'].get('price', 0)) * int(item['qty'])
+            lines.append(f"{idx}) {item['product']['name']} x{item['qty']} - ${sub} ({item['details']})")
+            total += sub
+        return ("\n".join(lines), round(total,2))
 
-    def create_order_from_cart(self, phone, lat=None, lon=None):
-        order_id = self.order_counter
-        self.order_counter += 1
-        user = self.users[phone]
-        items = []
-        total = 0
-        for it in user["cart"]:
-            p = self.product_lookup(it["product_id"]) if self.product_lookup else {"price": 0, "name": f"id{it['product_id']}"}
-            items.append({"product": p, "qty": it["qty"], "details": it["details"]})
-            total += p.get("price",0) * it["qty"]
-        code = gen_code(6)
-        dist = None
-        if lat is not None and lon is not None:
-            dist = round(haversine_km(self.restaurant_coord[0], self.restaurant_coord[1], lat, lon), 2)
+    def remove_from_cart(self, phone, index):
+        u = self.get_user(phone)
+        if 0 <= index < len(u['cart']):
+            u['cart'].pop(index)
+            return True
+        return False
+
+    def create_order_from_cart(self, phone, lat, lon):
+        u = self.get_user(phone)
+        lines, total = self.cart_summary(phone)
+        order_id = len(self.orders) + 1
+        code = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=6))
+        items = [{"id": item['product']['id'], "name": item['product']['name'], "qty": item['qty'], "price": item['product'].get('price',0)} for item in u['cart']]
+        # calculate distance from restaurant (to be set outside)
         order = {
             "id": order_id,
-            "phone": phone,
+            "user": phone,
             "items": items,
             "total": total,
-            "created_at": datetime.utcnow(),
-            "status": "waiting",
             "code": code,
             "lat": lat,
             "lon": lon,
-            "distance_km": dist
+            "created_at": time.time(),
+            "status": "queued"
         }
-        self.orders[order_id] = order
-        user["cart"] = []
+        self.orders.append(order)
+        # clear cart
+        u['cart'] = []
         return order
