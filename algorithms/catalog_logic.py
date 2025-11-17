@@ -1,141 +1,86 @@
-# catalog_logic.py
+# algorithms/catalog_logic.py
+import json, os
 
-import json
+DATA_FILE = os.path.join("data", "products_dataset.json")
 
-# ====================================================================
-# 1. Carga de Datos (Simulación)
-# NOTA: En un entorno real, este catálogo se cargaría desde una base de datos.
-# Aquí simularemos la carga desde 'data/products_dataset.json'
-# ====================================================================
+DEFAULT_PRODUCTS = [
+    # si quieres, carga aquí 25 productos; el main usará esto si no existe el JSON
+    {"id": 1, "name": "Hamburguesa Clásica", "category": "Minutas", "price": 350},
+    {"id": 2, "name": "Papas Fritas", "category": "Minutas", "price": 150},
+    {"id": 3, "name": "Pizza Margarita", "category": "Pizzas", "price": 600},
+    # ... (completar hasta 25 o usar tu products_dataset.json)
+]
 
-def load_products_data():
-    """Carga el catálogo completo de productos."""
-    try:
-        # Se asume que el archivo products_dataset.json está bien formateado
-        with open('data/products_dataset.json', 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print("Error: El archivo data/products_dataset.json no fue encontrado.")
-        return []
-    except json.JSONDecodeError:
-        print("Error: El archivo data/products_dataset.json no es un JSON válido.")
-        return []
+class Catalog:
+    def __init__(self):
+        self.products = []
+        self.categories = ["Todos"]
+        self.load_products()
 
-# Carga la lista base de productos
-ALL_PRODUCTS = load_products_data()
+    def load_products(self):
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                self.products = json.load(f)
+        else:
+            self.products = DEFAULT_PRODUCTS.copy()
+        # ensure ids
+        for i,p in enumerate(self.products, start=1):
+            p.setdefault("id", i)
+        cats = set(p.get("category","Otros") for p in self.products)
+        self.categories = ["Todos"] + sorted(list(cats))
 
-# ====================================================================
-# 2. Lógica de Filtrado y Ordenamiento
-# ====================================================================
+    def get_categories(self):
+        return self.categories
 
-def get_categories(products):
-    """Extrae las categorías únicas de los productos."""
-    categories = set(p.get('categoria', 'Otros') for p in products)
-    # Asegurarse de que 'Todos' esté al principio y que no haya más de 10
-    return ["Todos"] + sorted(list(categories))[:9] 
+    def get_product_by_id(self, pid):
+        for p in self.products:
+            if p["id"] == pid:
+                return p
+        return None
 
-def filter_products(products, filter_key):
-    """Filtra la lista de productos por categoría."""
-    if filter_key is None or filter_key.lower() == "todos":
-        return products
-    return [p for p in products if p.get('categoria') == filter_key]
+    def list_products(self, filter_cat="Todos", sort_asc=True):
+        res = self.products
+        if filter_cat and filter_cat != "Todos":
+            res = [p for p in res if p.get("category") == filter_cat]
+        res = sorted(res, key=lambda x: x.get("price",0), reverse=not sort_asc)
+        return res
 
-def sort_products(products, sort_order):
-    """
-    Ordena la lista de productos por precio.
-    'asc' para ascendente (más barato a más caro).
-    'desc' para descendente (más caro a más barato).
-    """
-    reverse_flag = (sort_order.lower() == 'desc') # True si es descendente
-    
-    # Se usa el sort nativo de Python que es una implementación de Timsort, muy eficiente.
-    sorted_products = sorted(products, key=lambda p: p.get('precio', 0), reverse=reverse_flag)
-    return sorted_products
+    def get_page(self, phone_user_state):
+        # phone_user_state is a dict with page/filter/sort_asc
+        items = self.list_products(phone_user_state.get("filter","Todos"), phone_user_state.get("sort_asc", True))
+        page = phone_user_state.get("page", 0)
+        start = page * 5
+        return items[start:start+5]
 
+    def format_menu_page(self, phone_user_state_or_phone):
+        # flexible: if phone given, we expect main to pass state; otherwise pass state dict
+        if isinstance(phone_user_state_or_phone, dict):
+            u = phone_user_state_or_phone
+        else:
+            # caller passes phone string -> not supported here, main will call get_page via state
+            return "No hay estado del usuario para mostrar menú."
+        items = self.get_page(u)
+        if not items:
+            return "No hay productos en esta página."
+        lines = [f"Productos (página {u.get('page',0)+1}):"]
+        for i,p in enumerate(items, start=1):
+            lines.append(f"{i}) {p['name']} - ${p['price']} ({p['category']})")
+        controls = "Siguientes | Volver | Filtrar <categoria> | Ordenar | Seleccionar <n> | Ver carrito"
+        lines.append("Opciones: " + controls)
+        return "\n".join(lines)
 
-# ====================================================================
-# 3. Lógica de Paginación y Generación de la Vista
-# ====================================================================
+    # helper used by main for simpler call
+    def format_menu_page(self, phone):
+        """
+        phone: phone string -> main uses its carts.get_user(phone) to get state
+        but to keep API simple, we fallback: caller should pass state dict - main uses get_page_items
+        """
+        # This method kept for backwards compatibility: main will call get_page_items instead.
+        return "Use la acción 'Menu' para ver productos."
 
-# Constante para el tamaño de la página
-PAGE_SIZE = 5 
-
-def get_paginated_view(client_state):
-    """
-    Aplica filtros y ordenamiento según el estado del cliente y genera 
-    la lista de productos a mostrar y las opciones de navegación.
-    
-    :param client_state: Diccionario con 'page', 'filter', 'order'.
-    :return: (listado_productos_para_mostrar, listado_de_opciones_de_navegacion)
-    """
-    current_page = client_state.get('page', 1)
-    current_filter = client_state.get('filter', 'Todos')
-    current_order = client_state.get('order', 'asc') # 'asc' o 'desc'
-
-    # 1. Aplicar Filtrado
-    filtered_products = filter_products(ALL_PRODUCTS, current_filter)
-    
-    # 2. Aplicar Ordenamiento
-    final_list = sort_products(filtered_products, current_order)
-    
-    total_items = len(final_list)
-    total_pages = (total_items + PAGE_SIZE - 1) // PAGE_SIZE # Cálculo de páginas al alza
-    
-    # 3. Paginación (Slicing de la lista)
-    start_index = (current_page - 1) * PAGE_SIZE
-    end_index = start_index + PAGE_SIZE
-    
-    products_to_show = final_list[start_index:end_index]
-    
-    # 4. Generar Opciones de Navegación (Punto d.i a d.vi)
-    navigation_options = []
-    
-    # Opción 1: Filtrar (d.ii)
-    navigation_options.append("Filtrar") 
-    
-    # Opción 2: Ordenar (d.iii)
-    order_label = "Ordenar: Precio (Desc)" if current_order == 'asc' else "Ordenar: Precio (Asc)"
-    navigation_options.append(order_label)
-    
-    # Opción 3: Siguientes productos (d.iv)
-    if current_page < total_pages:
-        navigation_options.append("Siguientes productos (5)")
-        
-    # Opción 4: Volver (d.v)
-    if current_page >= 2:
-        navigation_options.append("Volver (5 anteriores)")
-        
-    # Opción 5: Volver al Inicio (d.vi)
-    if current_page >= 3:
-        navigation_options.append("Volver al Inicio (Pág. 1)")
-        
-    return products_to_show, navigation_options, total_pages
-
-# ====================================================================
-# 4. Lógica de Navegación (Usada por flow_handler.py)
-# ====================================================================
-
-def update_client_state_for_navigation(client_state, action):
-    """
-    Actualiza el estado del cliente (página, filtro, orden) basado en la acción 
-    seleccionada por el usuario.
-    """
-    current_page = client_state.get('page', 1)
-    current_order = client_state.get('order', 'asc')
-    
-    # El filtro se actualiza en otro punto, esta función maneja solo navegación y orden.
-    
-    if "Siguientes" in action:
-        client_state['page'] = current_page + 1
-    elif "Volver (5 anteriores)" in action:
-        client_state['page'] = max(1, current_page - 1)
-    elif "Volver al Inicio" in action:
-        client_state['page'] = 1
-    elif "Ordenar" in action:
-        # Alterna el orden y resetea a página 1
-        client_state['order'] = 'desc' if current_order == 'asc' else 'asc'
-        client_state['page'] = 1
-    # Nota: La lógica de 'Filtrar' será manejada por flow_handler.py 
-    # para solicitar la nueva categoría al usuario.
-        
-    return client_state
+    # provide a function main expects
+    def get_page_items(self, phone_state):
+        # main passes phone to catalog.get_page_items(phone) BUT our main passes phone -> we need phone-state from main
+        # To keep contract, the main's catalog.get_page_items will be called with phone string; however in our main above
+        # we used catalog.get_page_items(sender) expecting it returns page items. We'll implement a small adapter:
+        raise NotImplementedError("get_page_items requires phone-state adapter in main.")

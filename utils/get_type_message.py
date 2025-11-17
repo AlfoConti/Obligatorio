@@ -1,13 +1,14 @@
-def get_message_type(message):
+# utils/get_type_message.py
+def get_message_type(message: dict):
     """
-    Detecta el tipo de mensaje recibido (texto, audio, ubicación, etc.)
+    Devuelve ("text", contenido) o ("location", (lat, lon)) o ("unknown", None)
     """
-    if "text" in message:
-        return "text", message["text"]["body"]
-    elif "audio" in message:
-        return "audio", message["audio"]["id"]
-    elif "location" in message:
-        location = message["location"]
-        return "location", f"Lat: {location['latitude']}, Lng: {location['longitude']}"
-    else:
-        return "unknown", "Tipo de mensaje no reconocido"
+    if not isinstance(message, dict):
+        return "unknown", None
+    if "text" in message and isinstance(message["text"], dict):
+        body = message["text"].get("body", "")
+        return "text", body
+    if "location" in message:
+        loc = message["location"]
+        return "location", (loc.get("latitude"), loc.get("longitude"))
+    return "unknown", None
