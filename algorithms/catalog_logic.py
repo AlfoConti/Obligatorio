@@ -1,119 +1,193 @@
 # algorithms/catalog_logic.py
+
 import json
 import os
-from math import isclose
 
-# Intentamos varias rutas para encontrar el JSON del catálogo
-CANDIDATE_PATHS = [
-    os.path.join("data", "catalog.json"),
-    os.path.join("algorithms", "catalog.json"),
-    os.path.join("data", "products_dataset.json")
-]
 
-def _find_catalog_path():
-    for p in CANDIDATE_PATHS:
-        if os.path.exists(p):
-            return p
-    return None
+CATALOG_PATH = os.path.join("data", "catalog.json")
 
-class Catalog:
-    def __init__(self):
-        self._path = _find_catalog_path()
-        if not self._path:
-            raise FileNotFoundError("No se encontró data/catalog.json ni algorithms/catalog.json. Subí el archivo.")
-        self.products = self.load_catalog()
-        # normalizamos claves para que el resto del código use 'name','category','price','description','id'
-        self._normalize_products()
+# Estado por usuario para el catálogo
+catalog_state = {}  
+# Estructura del estado:
+# catalog_state[user] = {
+#     "page": 0,
+#     "filter": "Todos",
+#     "sort": "ASC" / "DESC" / None,
+#     "products": [...]  # copia local filtrada/ordenada
+# }
 
-    def load_catalog(self):
-        with open(self._path, "r", encoding="utf-8") as f:
-            return json.load(f)
 
-    def _normalize_products(self):
-        norm = []
-        for p in self.products:
-            np = {}
-            np['id'] = p.get('id') or p.get('ID') or p.get('Id')
-            # nombre -> name
-            np['name'] = p.get('nombre') or p.get('name') or p.get('title') or p.get('titulo') or "Producto"
-            # categoria -> category
-            np['category'] = p.get('categoria') or p.get('category') or "Otros"
-            # precio -> price
-            np['price'] = p.get('precio') or p.get('price') or 0
-            # descripcion -> description
-            np['description'] = p.get('descripcion') or p.get('description') or p.get('desc') or ""
-            norm.append(np)
-        self.products = norm
+# ──────────────────────────────────────────────
+# Cargar el catálogo desde JSON
+# ──────────────────────────────────────────────
+def load_catalog():
+    with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    def get_categories(self):
-        cats = sorted({p['category'] for p in self.products})
-        return cats
 
-    def get_products_by_category(self, category):
-        return [p for p in self.products if p['category'].lower() == category.lower()]
+FULL_CATALOG = load_catalog()
 
-    def get_product_by_id(self, product_id):
-        for p in self.products:
-            try:
-                if str(p['id']) == str(product_id):
-                    return p
-            except Exception:
-                continue
-        return None
 
-    def get_restaurant_coord(self):
-        # Coordenadas por defecto del restaurante (puedes cambiarlas)
-        return (-34.9011, -56.1645)
+# ──────────────────────────────────────────────
+# Inicializar estado para usuario
+# ──────────────────────────────────────────────
+def init_user_catalog(user_phone):
+    catalog_state[user_phone] = {
+        "page": 0,
+        "filter": "Todos",
+        "sort": None,
+        "products": FULL_CATALOG.copy()
+    }
 
-    # helpers para paginado y estado de usuario
-    def get_page_items_for_state(self, user_state):
-        """
-        Retorna la lista de items (normalizados) que debe mostrarse
-        según filtro y orden del user_state.
-        """
-        items = list(self.products)
-        fil = user_state.get("filter")
-        if fil:
-            items = [p for p in items if p['category'].lower() == fil.lower()]
 
-        sort_asc = user_state.get("sort_asc", True)
-        items = sorted(items, key=lambda x: float(x.get('price', 0)), reverse=not sort_asc)
-        return items
+# ──────────────────────────────────────────────
+# Aplicar filtros
+# ──────────────────────────────────────────────
+def apply_filter(user_phone, category):
+    state = catalog_state[user_phone]
+    state["filter"] = category
+    state["page"] = 0  # reset
 
-    def format_menu_page_for_user_state(self, user_state):
-        """
-        Construye el texto del menú con paginado de 5 items.
-        user_state keys:
-          - page (int)
-          - filter (str)
-          - sort_asc (bool)
-        """
-        page = int(user_state.get("page", 0))
-        page_size = 5
-        all_items = self.get_page_items_for_state(user_state)
-        total = len(all_items)
-        start = page * page_size
-        end = start + page_size
-        page_items = all_items[start:end]
+    if category == "Todos":
+        state["products"] = FULL_CATALOG.copy()
+    else:
+        state["products"] = [
+            p for p in FULL_CATALOG if p["categoria"] == category
+        ]
 
-        if not page_items:
-            return "No hay productos para mostrar."
 
-        lines = []
-        lines.append(f"📄 *Página {page+1}*  (mostrando {start+1}-{min(end,total)} de {total})\n")
-        if user_state.get("filter"):
-            lines.append(f"Filtrado por: *{user_state.get('filter')}*\n")
-        for idx, p in enumerate(page_items, start=1):
-            lines.append(f"{idx}) *{p['name']}* - ${p['price']}\n   _{p['description']}_\n")
+# ──────────────────────────────────────────────
+# Ordenar productos
+# ──────────────────────────────────────────────
+def toggle_sort(user_phone):
+    state = catalog_state[user_phone]
 
-        # opciones de navegación
-        nav = []
-        if end < total:
-            nav.append("Siguientes")
-        if page > 0:
-            nav.append("Volver")
-        nav.append("Filtrar <categoria>")
-        nav.append("Ordenar")
-        nav.append("Seleccionar <n>")
-        lines.append("Comandos: " + " | ".join(nav))
-        return "\n".join(lines)
+    # alternar estado
+    if state["sort"] is None or state["sort"] == "DESC":
+        state["sort"] = "ASC"
+    else:
+        state["sort"] = "DESC"
+
+    reverse = state["sort"] == "DESC"
+
+    state["products"].sort(key=lambda p: p["precio"], reverse=reverse)
+    state["page"] = 0  # reset
+
+
+# ──────────────────────────────────────────────
+# Obtener categorías disponibles
+# ──────────────────────────────────────────────
+def get_categories():
+    categorias = sorted({p["categoria"] for p in FULL_CATALOG})
+    # agregar opción Todos
+    return ["Todos"] + categorias
+
+
+# ──────────────────────────────────────────────
+# Obtener página actual (5 productos)
+# ──────────────────────────────────────────────
+def get_page(user_phone):
+    state = catalog_state[user_phone]
+    products = state["products"]
+
+    page = state["page"]
+    start = page * 5
+    end = start + 5
+
+    return products[start:end]
+
+
+# ──────────────────────────────────────────────
+# Pasar a la siguiente página
+# ──────────────────────────────────────────────
+def next_page(user_phone):
+    state = catalog_state[user_phone]
+    total = len(state["products"])
+    max_page = (total - 1) // 5
+
+    if state["page"] < max_page:
+        state["page"] += 1
+        return True
+    return False
+
+
+# ──────────────────────────────────────────────
+# Volver a página anterior
+# ──────────────────────────────────────────────
+def previous_page(user_phone):
+    state = catalog_state[user_phone]
+    if state["page"] > 0:
+        state["page"] -= 1
+        return True
+    return False
+
+
+# ──────────────────────────────────────────────
+# Volver al inicio
+# ──────────────────────────────────────────────
+def go_to_start(user_phone):
+    catalog_state[user_phone]["page"] = 0
+
+
+# ──────────────────────────────────────────────
+# Construir lista para WhatsApp (10 opciones máx.)
+# ──────────────────────────────────────────────
+def build_whatsapp_catalog_list(user_phone):
+    """
+    Devuelve un dict listo para usar en send_message()
+    {
+        "title": "...",
+        "body": "...",
+        "options": [
+            {"id": "...", "title": "...", "description": "..."}
+        ]
+    }
+    """
+
+    state = catalog_state[user_phone]
+    page_items = get_page(user_phone)
+
+    options = []
+
+    # Opción 1-5 → productos
+    for p in page_items:
+        options.append({
+            "id": f"prod_{p['id']}",
+            "title": f"{p['nombre']} - ${p['precio']}",
+            "description": p["categoria"]
+        })
+
+    # Agregar Filtros
+    options.append({"id": "filter", "title": "🔎 Filtrar por categoría", "description": ""})
+
+    # Agregar Ordenar
+    sort_txt = "↑ precio menor" if state["sort"] != "ASC" else "↓ precio mayor"
+    options.append({"id": "sort", "title": f"↕ Ordenar {sort_txt}", "description": ""})
+
+    # Siguientes productos
+    if next_page_exists(user_phone):
+        options.append({"id": "next", "title": "➡ Siguientes productos", "description": ""})
+
+    # Volver si page >= 1
+    if state["page"] >= 1:
+        options.append({"id": "prev", "title": "⬅ Volver", "description": ""})
+
+    # Volver al inicio si page >= 2
+    if state["page"] >= 2:
+        options.append({"id": "start", "title": "🏠 Volver al inicio", "description": ""})
+
+    return {
+        "title": "Catálogo",
+        "body": f"Página {state['page'] + 1}",
+        "options": options
+    }
+
+
+# ──────────────────────────────────────────────
+# Siguiente página disponible?
+# ──────────────────────────────────────────────
+def next_page_exists(user_phone):
+    st = catalog_state[user_phone]
+    total = len(st["products"])
+    max_page = (total - 1) // 5
+    return st["page"] < max_page

@@ -1,99 +1,99 @@
 # algorithms/delivery_manager.py
-import math
+
 import random
-from collections import deque
+import string
 
-class DeliveryManager:
-    def __init__(self, restaurant_coord=(-34.9011, -56.1645)):
-        self.restaurant_coord = restaurant_coord
-        # four queues for zones: NO, NE, SO, SE
-        self.queues = {
-            "NO": deque(),
-            "NE": deque(),
-            "SO": deque(),
-            "SE": deque()
-        }
-        self.tandas_queue = deque()
-        self.repartidores = []  # list of repartidor dicts {id, state:'available'|'busy', stats...}
-        self.tandas = []  # tandas creadas
+from structures.data_models import DeliveryOrder
+from structures.trees_and_queues import SimpleQueue
+from utils.geo_calculator import process_location
 
-    def _zone_for_coord(self, lat, lon):
-        lat0, lon0 = self.restaurant_coord
-        # simple quadrant logic
-        if lat >= lat0 and lon < lon0:
-            return "NO"
-        if lat >= lat0 and lon >= lon0:
-            return "NE"
-        if lat < lat0 and lon < lon0:
-            return "SO"
-        return "SE"
 
-    def enqueue_order(self, order):
-        zone = self._zone_for_coord(order['lat'], order['lon'])
-        self.queues[zone].append(order)
-        return zone
+# ──────────────────────────────────────────────
+# CREACIÓN DE COLAS POR ZONA
+# ──────────────────────────────────────────────
 
-    def process_all_queues_and_create_tandas(self, orders_list=None):
-        """
-        Revisa cada cola; si tiene 7 pedidos o si el primer pedido tiene >45 min (omito tiempo real en el prototipo)
-        crea una tanda. Retorna número de tandas creadas en esta pasada.
-        """
-        created = 0
-        for zone, q in self.queues.items():
-            if len(q) >= 7:
-                self._create_tanda_from_queue(zone)
-                created += 1
-            elif len(q) > 0:
-                # simplified: si hay cualquiera, podemos crear tanda (para demo)
-                self._create_tanda_from_queue(zone)
-                created += 1
-        return created
+queues = {
+    "NE": SimpleQueue(),
+    "NO": SimpleQueue(),
+    "SE": SimpleQueue(),
+    "SO": SimpleQueue()
+}
 
-    def _create_tanda_from_queue(self, zone):
-        q = self.queues[zone]
-        if not q:
-            return None
-        # tomar hasta 7 pedidos
-        items = []
-        for _ in range(min(7, len(q))):
-            items.append(q.popleft())
-        tanda = {
-            "id": len(self.tandas) + 1,
-            "zone": zone,
-            "orders": items,
-            "assigned_to": None,
-            "status": "created"
-        }
-        # asignar repartidor disponible si existe
-        for r in self.repartidores:
-            if r.get("state") == "available":
-                tanda["assigned_to"] = r["id"]
-                r["state"] = "busy"
-                break
-        # si no hay repartidor disponible, encolamos la tanda
-        if tanda["assigned_to"] is None:
-            self.tandas_queue.append(tanda)
-        else:
-            tanda["status"] = "assigned"
-        self.tandas.append(tanda)
-        return tanda
 
-    # funciones de ayuda para testing
-    def add_repartidor(self, rep_id):
-        self.repartidores.append({"id": rep_id, "state": "available", "delivered": 0, "distance": 0.0})
+# ──────────────────────────────────────────────
+# GENERAR CÓDIGO DE PEDIDO (6 caracteres)
+# ──────────────────────────────────────────────
+def generate_order_code():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-    def assign_queued_tandas(self):
-        # intentar asignar tandas en espera a repartidores (incluso ocupados en tu lógica original, aquí asigna solo a available)
-        assigned = 0
-        for _ in range(len(self.tandas_queue)):
-            tanda = self.tandas_queue.popleft()
-            for r in self.repartidores:
-                if r["state"] == "available":
-                    tanda["assigned_to"] = r["id"]
-                    tanda["status"] = "assigned"
-                    r["state"] = "busy"
-                    assigned += 1
-                    break
-            if tanda["assigned_to"] is None:
-                self.tandas_queue.append(tanda)
-        return assigned
+
+# ──────────────────────────────────────────────
+# CREAR PEDIDO Y ENCOLARLO SEGÚN LA ZONA
+# ──────────────────────────────────────────────
+def register_delivery_order(user_id, lat, lon, cart):
+    """
+    Crea un pedido completo según el carrito actual y la ubicación del usuario.
+
+    Retorna:
+    {
+        "ok": True,
+        "order_code": "AB38F1",
+        "zone": "NE",
+        "time_min": 12,
+        "distance_km": 4.5
+    }
+    """
+
+    if not cart.items:
+        return {"ok": False, "error": "El carrito está vacío."}
+
+    # 1) Procesar ubicación
+    geo = process_location(lat, lon)
+
+    zone = geo["zone"]
+    time_estimate = geo["time_min"]
+    distance = geo["distance_km"]
+
+    # 2) Generar código único
+    code = generate_order_code()
+
+    # 3) Crear objeto de pedido
+    order = DeliveryOrder(
+        user_id=user_id,
+        order_code=code,
+        zone=zone,
+        latitude=lat,
+        longitude=lon,
+        cart_items=cart.items.copy(),
+        total_amount=cart.get_total(),
+        distance_km=distance,
+        estimated_time=time_estimate
+    )
+
+    # 4) Encolar pedido según zona
+    queues[zone].enqueue(order)
+
+    return {
+        "ok": True,
+        "order_code": code,
+        "zone": zone,
+        "time_min": time_estimate,
+        "distance_km": distance
+    }
+
+
+# ──────────────────────────────────────────────
+# OBTENER EL PRÓXIMO PEDIDO DE UNA ZONA ESPECÍFICA
+# (para reportes o para asignar delivery)
+# ──────────────────────────────────────────────
+def get_next_order(zone):
+    if zone not in queues:
+        return None
+    return queues[zone].dequeue()
+
+
+# ──────────────────────────────────────────────
+# OBTENER TODAS LAS COLAS (para reportes globales)
+# ──────────────────────────────────────────────
+def get_all_queues():
+    return queues

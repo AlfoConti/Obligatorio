@@ -1,84 +1,109 @@
 # utils/cart_management.py
-import random
-import math
-import time
 
-def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    from math import radians, sin, cos, sqrt, atan2
-    rlat1, rlon1, rlat2, rlon2 = map(radians, [lat1, lon1, lat2, lon2])
-    dlat = rlat2 - rlat1
-    dlon = rlon2 - rlon1
-    a = sin(dlat/2)**2 + cos(rlat1)*cos(rlat2)*sin(dlon/2)**2
-    c = 2*atan2(sqrt(a), sqrt(1-a))
-    return R * c
+"""
+Carrito en memoria estilo Zustand/Redux.
+Se guarda por número de teléfono.
 
-class CartManager:
-    def __init__(self, product_lookup):
-        # product_lookup: función(product_id) -> producto dict
-        self.product_lookup = product_lookup
-        self.users = {}  # phone -> state dict
-        self.orders = []  # lista de órdenes creadas
+Estructura interna:
+carritos = {
+   "59891234567": {
+        "items": [
+            {
+               "id": "P23",
+               "nombre": "Hamburguesa completa",
+               "precio": 250,
+               "cantidad": 2,
+               "detalles": "Sin tomate"
+            },
+            {...}
+        ]
+   }
+}
+"""
 
-    def create_user_if_not_exists(self, phone):
-        if phone not in self.users:
-            self.users[phone] = {
-                "phone": phone,
-                "cart": [],  # list of {product_id, qty, details}
-                "state": "idle",
-                "page": 0,
-                "filter": None,
-                "sort_asc": True,
-            }
+carritos = {}
 
-    def get_user(self, phone):
-        self.create_user_if_not_exists(phone)
-        return self.users[phone]
 
-    def add_to_cart(self, phone, product_id, qty, details=""):
-        self.create_user_if_not_exists(phone)
-        prod = self.product_lookup(product_id)
-        if not prod:
-            return False
-        self.users[phone]['cart'].append({"product": prod, "qty": int(qty), "details": details})
-        return True
+# ──────────────────────────────────────────────
+# obtener carrito
+# ──────────────────────────────────────────────
+def get_cart(user_phone):
+    if user_phone not in carritos:
+        carritos[user_phone] = {"items": []}
+    return carritos[user_phone]
 
-    def cart_summary(self, phone):
-        u = self.get_user(phone)
-        lines = []
-        total = 0.0
-        for idx, item in enumerate(u['cart'], start=1):
-            sub = float(item['product'].get('price', 0)) * int(item['qty'])
-            lines.append(f"{idx}) {item['product']['name']} x{item['qty']} - ${sub} ({item['details']})")
-            total += sub
-        return ("\n".join(lines), round(total,2))
 
-    def remove_from_cart(self, phone, index):
-        u = self.get_user(phone)
-        if 0 <= index < len(u['cart']):
-            u['cart'].pop(index)
-            return True
-        return False
+# ──────────────────────────────────────────────
+# agregar producto
+# ──────────────────────────────────────────────
+def add_to_cart(user_phone, product_id, nombre, precio, cantidad, detalles=""):
+    cart = get_cart(user_phone)
 
-    def create_order_from_cart(self, phone, lat, lon):
-        u = self.get_user(phone)
-        lines, total = self.cart_summary(phone)
-        order_id = len(self.orders) + 1
-        code = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=6))
-        items = [{"id": item['product']['id'], "name": item['product']['name'], "qty": item['qty'], "price": item['product'].get('price',0)} for item in u['cart']]
-        # calculate distance from restaurant (to be set outside)
-        order = {
-            "id": order_id,
-            "user": phone,
-            "items": items,
-            "total": total,
-            "code": code,
-            "lat": lat,
-            "lon": lon,
-            "created_at": time.time(),
-            "status": "queued"
-        }
-        self.orders.append(order)
-        # clear cart
-        u['cart'] = []
-        return order
+    # ¿ya existe el producto en el carrito?
+    for item in cart["items"]:
+        if item["id"] == product_id:
+            item["cantidad"] += cantidad
+            if detalles:
+                item["detalles"] = detalles
+            return
+
+    cart["items"].append({
+        "id": product_id,
+        "nombre": nombre,
+        "precio": precio,
+        "cantidad": cantidad,
+        "detalles": detalles
+    })
+
+
+# ──────────────────────────────────────────────
+# quitar producto
+# ──────────────────────────────────────────────
+def remove_from_cart(user_phone, index):
+    cart = get_cart(user_phone)
+    if 0 <= index < len(cart["items"]):
+        cart["items"].pop(index)
+
+
+# ──────────────────────────────────────────────
+# vaciar carrito
+# ──────────────────────────────────────────────
+def clear_cart(user_phone):
+    carritos[user_phone] = {"items": []}
+
+
+# ──────────────────────────────────────────────
+# obtener total
+# ──────────────────────────────────────────────
+def calculate_total(user_phone):
+    cart = get_cart(user_phone)
+    total = 0
+    for item in cart["items"]:
+        total += item["precio"] * item["cantidad"]
+    return total
+
+
+# ──────────────────────────────────────────────
+# vista del carrito para enviar al usuario
+# ──────────────────────────────────────────────
+def format_cart(user_phone):
+    cart = get_cart(user_phone)
+    if not cart["items"]:
+        return "🛒 *Tu carrito está vacío*"
+
+    lines = ["🛒 *Carrito actual:*", ""]
+
+    for i, item in enumerate(cart["items"]):
+        subtotal = item["precio"] * item["cantidad"]
+        detalle = f"\n   - _{item['detalles']}_" if item["detalles"] else ""
+        lines.append(
+            f"*{i+1}. {item['nombre']}*\n"
+            f"   Cantidad: {item['cantidad']}\n"
+            f"   Precio c/u: ${item['precio']}\n"
+            f"   Subtotal: *${subtotal}*{detalle}\n"
+        )
+
+    total = calculate_total(user_phone)
+    lines.append(f"*TOTAL A PAGAR: ${total}*")
+
+    return "\n".join(lines)
