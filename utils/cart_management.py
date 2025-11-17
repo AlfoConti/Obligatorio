@@ -1,10 +1,8 @@
 # utils/cart_management.py
 
-from models.data_models import CartItem
+from structures.data_models import CartItem
 
-
-# Carrito en memoria para cada user (simulación simple)
-# En un sistema real, se usa DB, pero para el obligatorio es suficiente.
+# Carrito en memoria simple (por user)
 user_carts = {}
 
 
