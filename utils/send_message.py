@@ -1,69 +1,43 @@
+# utils/send_message.py
+import os
 import requests
 import json
 
-TOKEN = "TU_TOKEN_DE_WHATSAPP"
-PHONE_ID = "TU_PHONE_NUMBER_ID"
+# Token que pediste que esté presente (si querés usar env vars, reemplaza aquí).
+ACCESS_TOKEN = "EAALZCWMF3l0cBP4ZBZCUAZBaHpco2fgDuX76oZCKiEmTFjROjRuV0ZB8rVPkFq9hWkOYgrTzZAr4vx5nQXiDq0YyVt6JrF7qiC6wxFiTHrZB8MF6NpVyFKZC99N1i2w2zZAtYpu6QNxv8lTGTDzDFnZBZC9ZAHZAzB22lgSP4c7omSsNUwYiqN1G6YbMDyAZArSxZAYFgQZDZD"
+# Cambiá por el ID de tu número (o usa variable de entorno PHONE_NUMBER_ID)
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "846928765173274")
+GRAPH_VERSION = os.environ.get("GRAPH_VERSION", "v19.0")
 
-def send_text(to, text):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+BASE_URL = f"https://graph.facebook.com/{GRAPH_VERSION}/{PHONE_NUMBER_ID}/messages"
 
-    data = {
+HEADERS = {
+    "Authorization": f"Bearer {ACCESS_TOKEN}",
+    "Content-Type": "application/json"
+}
+
+def send_whatsapp_message(to, message_text):
+    """
+    Envía texto simple.
+    'to' debe ser el número en formato internacional sin '+' (ej: 59891234567)
+    """
+    body = {
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
-        "text": {"body": text}
+        "text": {"body": message_text}
     }
+    try:
+        r = requests.post(BASE_URL, headers=HEADERS, json=body, timeout=10)
+        print("send_whatsapp_message:", r.status_code, r.text)
+        return r.status_code, r.text
+    except Exception as e:
+        print("Error al enviar mensaje:", e)
+        return None, str(e)
 
-    return requests.post(url, headers=headers, data=json.dumps(data)).json()
+# retrocompatibilidad con el nombre que usa main
+def send_whatsapp_message_wrapper(to, message_text):
+    return send_whatsapp_message(to, message_text)
 
-
-def send_interactive_button(to, body, button_title, button_id):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
-
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {"text": body},
-            "action": {
-                "buttons": [
-                    {
-                        "type": "reply",
-                        "reply": {
-                            "id": button_id,
-                            "title": button_title
-                        }
-                    }
-                ]
-            }
-        }
-    }
-
-    return requests.post(url, headers=headers, data=json.dumps(data)).json()
-
-
-def send_interactive_list(to, title, body, sections):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
-
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "list",
-            "body": {"text": body},
-            "header": {"type": "text", "text": title},
-            "footer": {"text": "Selecciona una opción"},
-            "action": {
-                "button": "Ver opciones",
-                "sections": sections
-            }
-        }
-    }
-
-    return requests.post(url, headers=headers, data=json.dumps(data)).json()
+# Export simple name used in main: send_whatsapp_message
+send_whatsapp_message = send_whatsapp_message
