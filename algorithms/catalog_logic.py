@@ -1,119 +1,115 @@
 # algorithms/catalog_logic.py
 import json
 import os
-from math import isclose
+from utils.send_message import send_list_message, send_button_message
 
-# Intentamos varias rutas para encontrar el JSON del catálogo
-CANDIDATE_PATHS = [
-    os.path.join("data", "catalog.json"),
-    os.path.join("algorithms", "catalog.json"),
-    os.path.join("data", "products_dataset.json")
-]
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+CATALOG_PATH = os.path.join(BASE_DIR, "data", "catalog.json")
 
-def _find_catalog_path():
-    for p in CANDIDATE_PATHS:
-        if os.path.exists(p):
-            return p
-    return None
+PAGE_SIZE = 5
 
-class Catalog:
-    def __init__(self):
-        self._path = _find_catalog_path()
-        if not self._path:
-            raise FileNotFoundError("No se encontró data/catalog.json ni algorithms/catalog.json. Subí el archivo.")
-        self.products = self.load_catalog()
-        # normalizamos claves para que el resto del código use 'name','category','price','description','id'
-        self._normalize_products()
+# Load products once
+with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+    PRODUCTS = json.load(f)
 
-    def load_catalog(self):
-        with open(self._path, "r", encoding="utf-8") as f:
-            return json.load(f)
+# Ensure categories list
+def get_categories():
+    cats = sorted(list({p.get("category","Otros") for p in PRODUCTS}))
+    cats = ["Todos"] + cats
+    return cats[:10]  # no más de 10
 
-    def _normalize_products(self):
-        norm = []
-        for p in self.products:
-            np = {}
-            np['id'] = p.get('id') or p.get('ID') or p.get('Id')
-            # nombre -> name
-            np['name'] = p.get('nombre') or p.get('name') or p.get('title') or p.get('titulo') or "Producto"
-            # categoria -> category
-            np['category'] = p.get('categoria') or p.get('category') or "Otros"
-            # precio -> price
-            np['price'] = p.get('precio') or p.get('price') or 0
-            # descripcion -> description
-            np['description'] = p.get('descripcion') or p.get('description') or p.get('desc') or ""
-            norm.append(np)
-        self.products = norm
+def filter_products(category):
+    if not category or category == "Todos":
+        return PRODUCTS
+    return [p for p in PRODUCTS if p.get("category") == category]
 
-    def get_categories(self):
-        cats = sorted({p['category'] for p in self.products})
-        return cats
+def sort_products(products, sort_state):
+    # sort_state: None, "asc", "desc"
+    if sort_state == "asc":
+        return sorted(products, key=lambda p: p.get("price", 0.0))
+    elif sort_state == "desc":
+        return sorted(products, key=lambda p: p.get("price", 0.0), reverse=True)
+    return products
 
-    def get_products_by_category(self, category):
-        return [p for p in self.products if p['category'].lower() == category.lower()]
+def make_menu_sections(products_page, session):
+    # products_page: list of product dicts
+    rows = []
+    for p in products_page:
+        rows.append({
+            "id": f"prod_{p['id']}",
+            "title": p.get("name"),
+            "description": f"${p.get('price',0):.2f} - {p.get('category','')}"
+        })
 
-    def get_product_by_id(self, product_id):
-        for p in self.products:
-            try:
-                if str(p['id']) == str(product_id):
-                    return p
-            except Exception:
-                continue
-        return None
+    # Controls: create control rows (max total rows 10 -> we have PAGE_SIZE product rows so up to 5 controls)
+    control_rows = []
 
-    def get_restaurant_coord(self):
-        # Coordenadas por defecto del restaurante (puedes cambiarlas)
-        return (-34.9011, -56.1645)
+    # Filtrar
+    control_rows.append({"id": "ctl_filter", "title": "🔎 Filtrar", "description": "Seleccionar categoría"})
 
-    # helpers para paginado y estado de usuario
-    def get_page_items_for_state(self, user_state):
-        """
-        Retorna la lista de items (normalizados) que debe mostrarse
-        según filtro y orden del user_state.
-        """
-        items = list(self.products)
-        fil = user_state.get("filter")
-        if fil:
-            items = [p for p in items if p['category'].lower() == fil.lower()]
+    # Ordenar
+    sort_label = "Ordenar (precio)"
+    if session.get("sort") == "asc":
+        sort_label += " ↑"
+    elif session.get("sort") == "desc":
+        sort_label += " ↓"
+    control_rows.append({"id": "ctl_sort", "title": sort_label, "description": "Alterna asc/desc"})
 
-        sort_asc = user_state.get("sort_asc", True)
-        items = sorted(items, key=lambda x: float(x.get('price', 0)), reverse=not sort_asc)
-        return items
+    # Siguientes
+    total_products = len(session.get("_filtered_products_cache", PRODUCTS))
+    current_page = session.get("page", 0)
+    if (current_page + 1) * PAGE_SIZE < total_products:
+        control_rows.append({"id": f"ctl_next_{current_page+1}", "title": "➜ Siguientes", "description": "Ver próximos 5 productos"})
 
-    def format_menu_page_for_user_state(self, user_state):
-        """
-        Construye el texto del menú con paginado de 5 items.
-        user_state keys:
-          - page (int)
-          - filter (str)
-          - sort_asc (bool)
-        """
-        page = int(user_state.get("page", 0))
-        page_size = 5
-        all_items = self.get_page_items_for_state(user_state)
-        total = len(all_items)
-        start = page * page_size
-        end = start + page_size
-        page_items = all_items[start:end]
+    # Volver
+    if current_page > 0:
+        control_rows.append({"id": f"ctl_prev_{current_page-1}", "title": "◀ Volver", "description": "Ver anteriores"})
 
-        if not page_items:
-            return "No hay productos para mostrar."
+    # Volver al inicio
+    if current_page >= 2:
+        control_rows.append({"id": "ctl_start", "title": "⤴ Volver al inicio", "description": "Ir a primera página"})
 
-        lines = []
-        lines.append(f"📄 *Página {page+1}*  (mostrando {start+1}-{min(end,total)} de {total})\n")
-        if user_state.get("filter"):
-            lines.append(f"Filtrado por: *{user_state.get('filter')}*\n")
-        for idx, p in enumerate(page_items, start=1):
-            lines.append(f"{idx}) *{p['name']}* - ${p['price']}\n   _{p['description']}_\n")
+    sections = [
+        {"title": f"Productos — Página {current_page+1}", "rows": rows},
+        {"title": "Controles", "rows": control_rows}
+    ]
+    return sections
 
-        # opciones de navegación
-        nav = []
-        if end < total:
-            nav.append("Siguientes")
-        if page > 0:
-            nav.append("Volver")
-        nav.append("Filtrar <categoria>")
-        nav.append("Ordenar")
-        nav.append("Seleccionar <n>")
-        lines.append("Comandos: " + " | ".join(nav))
-        return "\n".join(lines)
+# Public API: send menu for a session
+def send_product_menu(number: str, session: dict):
+    """
+    session is a dict stored per-user with keys:
+    - page: int
+    - category: str
+    - sort: None/'asc'/'desc'
+    We also cache filtered products inside session as '_filtered_products_cache' for quick paging.
+    """
+
+    # compute filtered & sorted list and store cache in session
+    products_filtered = filter_products(session.get("category", "Todos"))
+    products_sorted = sort_products(products_filtered, session.get("sort"))
+    session["_filtered_products_cache"] = products_sorted
+
+    page = session.get("page", 0)
+    start = page * PAGE_SIZE
+    page_items = products_sorted[start:start + PAGE_SIZE]
+
+    sections = make_menu_sections(page_items, session)
+    header = "Menú del Restaurante"
+    body = f"Página {page+1} — categoría: {session.get('category','Todos')}"
+    return send_list_message(number, header, body, sections)
+
+def send_filter_menu(number: str):
+    cats = get_categories()
+    rows = [{"id": f"cat_{c}", "title": c, "description": ""} for c in cats]
+    sections = [{"title": "Categorías", "rows": rows}]
+    return send_list_message(number, "Filtrar", "Elige categoría", sections)
+
+def request_quantity(number: str, product_id: str):
+    # send buttons for quick quantities
+    buttons = [
+        {"id": f"qty_{product_id}_1", "title": "1"},
+        {"id": f"qty_{product_id}_2", "title": "2"},
+        {"id": f"qty_{product_id}_3", "title": "3"},
+    ]
+    return send_button_message(number, f"Ingrese cantidad para {product_id}", buttons, header="Cantidad")

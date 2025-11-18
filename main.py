@@ -1,182 +1,164 @@
 # main.py
 import os
 from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse, JSONResponse
+from algorithms.catalog_logic import send_product_menu, send_filter_menu, request_quantity
+from utils.send_message import send_text_message
 import uvicorn
-from utils.get_type_message import get_message_type
-from utils.send_message import send_whatsapp_message
-from utils.cart_management import CartManager
-from algorithms.catalog_logic import Catalog
-from algorithms.delivery_manager import DeliveryManager
 
 app = FastAPI()
-VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "pepito123")
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
 
-# INSTANCIAS
-catalog = Catalog()
-carts = CartManager(product_lookup=catalog.get_product_by_id)
-restaurant_coord = catalog.get_restaurant_coord()
-delivery_manager = DeliveryManager(restaurant_coord=restaurant_coord)
+# Simple in-memory sessions
+SESSIONS = {}
 
-@app.get("/welcome")
-def welcome():
-    return {"mensaje": "welcome developer"}
+def get_session(user):
+    s = SESSIONS.get(user)
+    if not s:
+        s = {"page": 0, "category": "Todos", "sort": None, "cart": [], "_filtered_products_cache": None}
+        SESSIONS[user] = s
+    return s
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Bot activo"}
+
+# Webhook verification endpoint (Meta expects this)
 @app.get("/whatsapp")
 async def verify(request: Request):
-    params = dict(request.query_params)
+    params = request.query_params
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        return int(challenge)
-    return {"error": "Token inválido"}
+        return PlainTextResponse(challenge)
+    return PlainTextResponse("Verification failed", status_code=403)
 
+# Webhook listener
 @app.post("/whatsapp")
-async def webhook(request: Request):
-    payload = await request.json()
-    print("Webhook received:", payload)
+async def whatsapp_webhook(request: Request):
+    body = await request.json()
     try:
-        entry = payload.get("entry", [])[0]
+        entry = body.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
-    except Exception:
-        print("Payload inesperado")
-        return "EVENT_RECEIVED"
+        messages = value.get("messages", [])
+        if not messages:
+            return JSONResponse({"status": "no_messages"})
 
-    messages = value.get("messages", [])
-    if not messages:
-        return "EVENT_RECEIVED"
+        msg = messages[0]
+        user = msg.get("from")
+        session = get_session(user)
 
-    message = messages[0]
-    sender = message.get("from")
-    carts.create_user_if_not_exists(sender)
+        # Interactive message
+        if msg.get("type") == "interactive":
+            inter = msg.get("interactive", {})
+            itype = inter.get("type")
+            if itype == "list_reply":
+                lr = inter.get("list_reply", {})
+                row_id = lr.get("id")
+                return await handle_list_reply(user, row_id)
+            elif itype == "button_reply":
+                br = inter.get("button_reply", {})
+                btn_id = br.get("id")
+                return await handle_button_reply(user, btn_id)
 
-    msg_type, content = get_message_type(message)
-    if msg_type == "text":
-        resp = handle_text_flow(sender, content.strip())
-        if resp:
-            send_whatsapp_message(sender, resp)
-        return "EVENT_RECEIVED"
+        # Text message
+        if msg.get("type") == "text":
+            body_text = msg.get("text", {}).get("body", "").strip().lower()
+            # initial menu trigger
+            if body_text in ["menu", "hola", "start", "inicio"]:
+                # send initial buttons
+                send_text_message(user, "Bienvenido! Escribe 'menu' o pulsa el botón para ver productos.")
+                # open first page
+                session["page"] = 0
+                session["category"] = "Todos"
+                session["sort"] = None
+                send_product_menu(user, session)
+                return JSONResponse({"status": "menu_sent"})
+            else:
+                send_text_message(user, "Escribe 'menu' para ver el catálogo.")
+                return JSONResponse({"status": "text_handled"})
 
-    if msg_type == "location":
-        lat, lon = content
-        resp = handle_location_flow(sender, lat, lon)
-        if resp:
-            send_whatsapp_message(sender, resp)
-        return "EVENT_RECEIVED"
+        # Location, voice, etc - not handled here
+        send_text_message(user, "Tipo de mensaje no soportado por el prototipo (usa 'menu').")
+        return JSONResponse({"status": "unsupported_type"})
 
-    send_whatsapp_message(sender, "Tipo de mensaje no soportado en el prototipo.")
-    return "EVENT_RECEIVED"
+    except Exception as e:
+        print("Webhook error:", e)
+        return JSONResponse({"status": "error", "detail": str(e)})
 
-# Flow handlers
-def handle_text_flow(phone, text):
-    u = carts.get_user(phone)
+# Handlers
+async def handle_list_reply(user, row_id):
+    session = get_session(user)
+    # product row selected
+    if row_id.startswith("prod_"):
+        prod_id = row_id.split("prod_",1)[1]
+        # ask for quantity via buttons
+        request_quantity(user, prod_id)
+        # store pending selection
+        session["pending_product"] = prod_id
+        return JSONResponse({"status": "asked_qty"})
+    # control rows
+    if row_id == "ctl_filter":
+        send_filter_menu(user)
+        return JSONResponse({"status": "filter_sent"})
+    if row_id == "ctl_sort":
+        # toggle sort: None -> asc -> desc -> None
+        if session.get("sort") is None:
+            session["sort"] = "asc"
+        elif session["sort"] == "asc":
+            session["sort"] = "desc"
+        else:
+            session["sort"] = None
+        # reset page to 0 and resend menu
+        session["page"] = 0
+        send_product_menu(user, session)
+        return JSONResponse({"status": "sorted"})
+    if row_id.startswith("ctl_next_"):
+        # pattern ctl_next_{page}
+        new_page = int(row_id.split("ctl_next_",1)[1])
+        session["page"] = new_page
+        send_product_menu(user, session)
+        return JSONResponse({"status": "next_page"})
+    if row_id.startswith("ctl_prev_"):
+        new_page = int(row_id.split("ctl_prev_",1)[1])
+        session["page"] = new_page
+        send_product_menu(user, session)
+        return JSONResponse({"status": "prev_page"})
+    if row_id == "ctl_start":
+        session["page"] = 0
+        send_product_menu(user, session)
+        return JSONResponse({"status": "start_page"})
+    if row_id.startswith("cat_"):
+        cat = row_id.split("cat_",1)[1]
+        session["category"] = cat
+        session["page"] = 0
+        send_product_menu(user, session)
+        return JSONResponse({"status": "category_set"})
+    # fallback
+    send_text_message(user, "Opción no reconocida.")
+    return JSONResponse({"status": "unknown_list"})
 
-    # saludos simples
-    if text.lower() in ["hola", "hi", "buenas"]:
-        return "Hola! Soy el bot del restaurante. Escribe 'Menu' para ver nuestras opciones."
-
-    # Menu -> categorías
-    if text.lower() in ["menu", "inicio"]:
-        u["page"] = 0
-        u["filter"] = None
-        u["sort_asc"] = True
-        return catalog.format_menu_page_for_user_state(u)
-
-    if text.lower() == "siguientes":
-        u["page"] = u.get("page", 0) + 1
-        return catalog.format_menu_page_for_user_state(u)
-
-    if text.lower() == "volver":
-        u["page"] = max(0, u.get("page", 0) - 1)
-        return catalog.format_menu_page_for_user_state(u)
-
-    if text.lower().startswith("filtrar"):
-        parts = text.split(maxsplit=1)
-        if len(parts) == 2:
-            categoria = parts[1].strip()
-            if categoria not in catalog.get_categories():
-                return f"Categoría inválida. Categorías válidas: {', '.join(catalog.get_categories())}"
-            u["filter"] = categoria
-            u["page"] = 0
-            return catalog.format_menu_page_for_user_state(u)
-        return "Usa: Filtrar <categoria>"
-
-    if text.lower() == "ordenar":
-        u["sort_asc"] = not u.get("sort_asc", True)
-        return catalog.format_menu_page_for_user_state(u)
-
-    if text.lower().startswith("seleccionar"):
-        parts = text.split()
-        if len(parts) >= 2 and parts[1].isdigit():
-            idx = int(parts[1]) - 1
-            items = catalog.get_page_items_for_state(u)
-            page = u.get("page", 0)
-            start = page * 5
-            items_page = items[start:start+5]
-            if 0 <= idx < len(items_page):
-                p = items_page[idx]
-                u["temp_selection"] = {"product": p, "step": "qty"}
-                return f"Seleccionado *{p['name']}*. Indica cantidad (número)."
-            return "Selección inválida."
-        return "Usa: Seleccionar <n>"
-
-    # proceso de cantidad y detalles
-    if u.get("temp_selection") and u["temp_selection"].get("step") == "qty":
-        if text.isdigit() and int(text) > 0:
-            qty = int(text)
-            u["temp_selection"]["qty"] = qty
-            u["temp_selection"]["step"] = "details"
-            return "Indica detalles (ej: sin tomate) o escribe 'sin'."
-        return "Cantidad inválida."
-
-    if u.get("temp_selection") and u["temp_selection"].get("step") == "details":
-        details = "" if text.lower() == "sin" else text
-        sel = u["temp_selection"]
-        carts.add_to_cart(phone, sel["product"]["id"], sel["qty"], details)
-        u["temp_selection"] = None
-        return "Producto agregado. Escribe 'Ver carrito' para revisar."
-
-    if text.lower() == "ver carrito":
-        lines, total = carts.cart_summary(phone)
-        if not lines:
-            return "Tu carrito está vacío."
-        return f"Carrito:\n{lines}\nTotal: ${total}\nComandos: Quitar <n> | Seguir pidiendo | Confirmar"
-
-    if text.lower().startswith("quitar"):
-        parts = text.split()
-        if len(parts) >= 2 and parts[1].isdigit():
-            ok = carts.remove_from_cart(phone, int(parts[1]) - 1)
-            return "Producto eliminado." if ok else "Índice inválido."
-        return "Usa: Quitar <n>"
-
-    if text.lower() == "seguir pidiendo":
-        return catalog.format_menu_page_for_user_state(u)
-
-    if text.lower() == "confirmar":
-        u["state"] = "waiting_for_location"
-        return "Por favor comparte tu ubicación para calcular entrega."
-
-    if text.lower() == "admin process":
-        created = delivery_manager.process_all_queues_and_create_tandas(carts.orders)
-        return f"Tandas creadas: {created}"
-
-    return "No entendido. Escribe 'Menu' para comenzar."
-
-def handle_location_flow(phone, lat, lon):
-    u = carts.get_user(phone)
-    if u.get("state") == "waiting_for_location":
-        order = carts.create_order_from_cart(phone, lat, lon)
-        zone = delivery_manager.enqueue_order(order)
-        u["state"] = "idle"
-        created = delivery_manager.process_all_queues_and_create_tandas(carts.orders)
-        msg = f"Pedido creado (ID {order['id']}). Código: {order['code']}. Zona: {zone}."
-        if created:
-            msg += f" Tandas generadas: {created}"
-        return msg
-    return "Ubicación recibida."
+async def handle_button_reply(user, btn_id):
+    session = get_session(user)
+    # quantity selection pattern qty_{prodid}_{n}
+    if btn_id.startswith("qty_"):
+        _, prod_id, qty = btn_id.split("_",2)
+        qty = int(qty)
+        # add to cart (store minimal info: prod id and qty)
+        session["cart"].append({"product_id": prod_id, "qty": qty})
+        # show cart summary
+        # We'll just show a simple text list for now
+        lines = []
+        for it in session["cart"]:
+            lines.append(f"{it['product_id']} x{it['qty']}")
+        lines.append("Opciones: Quitar / Seguir pidiendo / Confirmar")
+        send_text_message(user, "Carrito:\n" + "\n".join(lines))
+        return JSONResponse({"status": "added_to_cart"})
+    # other button ids can be handled later
+    send_text_message(user, "Botón no reconocido.")
+    return JSONResponse({"status": "unknown_button"})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
-
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
