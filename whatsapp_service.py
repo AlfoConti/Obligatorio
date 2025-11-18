@@ -19,6 +19,7 @@ def _post(payload):
 def send_whatsapp_text(number, message):
     payload = {
         "messaging_product": "whatsapp",
+        "recipient_type": "individual",
         "to": number,
         "type": "text",
         "text": {
@@ -34,6 +35,7 @@ def send_whatsapp_text(number, message):
 def send_whatsapp_list(number, header, body, sections):
     payload = {
         "messaging_product": "whatsapp",
+        "recipient_type": "individual",
         "to": number,
         "type": "interactive",
         "interactive": {
@@ -50,11 +52,11 @@ def send_whatsapp_list(number, header, body, sections):
 
 
 # ==========================================
-# ✅ ENVIAR BOTONES — VERSIÓN CORRECTA
+# ENVIAR BOTONES — CORRECTO PARA 2025
 # ==========================================
 def send_whatsapp_buttons(number, header, body, buttons):
     """
-    buttons debe ser una lista así:
+    buttons debe ser una lista:
     [
         {"id": "btn_catalogo", "title": "Ver catálogo"},
         {"id": "btn_carrito", "title": "Ver carrito"}
@@ -62,6 +64,7 @@ def send_whatsapp_buttons(number, header, body, buttons):
     """
     payload = {
         "messaging_product": "whatsapp",
+        "recipient_type": "individual",
         "to": number,
         "type": "interactive",
         "interactive": {
