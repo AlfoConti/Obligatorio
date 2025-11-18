@@ -1,193 +1,54 @@
 # algorithms/catalog_logic.py
 
-import json
-import os
+# Tu catálogo REAL
+catalog = [
+    { "id": 1, "nombre": "Hamburguesa Clásica", "categoria": "Minutas", "precio": 450.00, "descripcion": "Carne, queso cheddar, lechuga y aderezo especial." },
+    { "id": 2, "nombre": "Pizza Margarita", "categoria": "Pizzas", "precio": 520.00, "descripcion": "Salsa de tomate, mozzarella y albahaca fresca." },
+    { "id": 3, "nombre": "Refresco Cola (Lata)", "categoria": "Bebidas", "precio": 120.00, "descripcion": "Lata de 350ml." },
+    { "id": 4, "nombre": "Papas Fritas Grandes", "categoria": "Acompañamientos", "precio": 210.00, "descripcion": "Porción grande de papas fritas rústicas." },
+    { "id": 5, "nombre": "Tarta de Manzana", "categoria": "Postres", "precio": 280.00, "descripcion": "Clásica tarta con helado de vainilla." },
+    { "id": 6, "nombre": "Milanesa a Caballo", "categoria": "Minutas", "precio": 610.00, "descripcion": "Milanesa de ternera con dos huevos fritos." },
+    { "id": 7, "nombre": "Pizza Pepperoni", "categoria": "Pizzas", "precio": 650.00, "descripcion": "Masa fina, mozzarella y pepperoni." },
+    { "id": 8, "nombre": "Agua Mineral sin Gas", "categoria": "Bebidas", "precio": 90.00, "descripcion": "Botella de 500ml." },
+    { "id": 9, "nombre": "Ensalada César", "categoria": "Ensaladas", "precio": 390.00, "descripcion": "Pollo grillado, crutones, queso parmesano y aderezo César." },
+    { "id": 10, "nombre": "Lomito Completo", "categoria": "Minutas", "precio": 720.00, "descripcion": "Lomo, jamón, queso, huevo, panceta, lechuga y tomate." },
+    { "id": 11, "nombre": "Pizza Fugazza", "categoria": "Pizzas", "precio": 500.00, "descripcion": "Cebolla, orégano y abundante mozzarella." },
+    { "id": 12, "nombre": "Jugo de Naranja Natural", "categoria": "Bebidas", "precio": 150.00, "descripcion": "Jugo de naranja exprimido al momento." },
+    { "id": 13, "nombre": "Aros de Cebolla", "categoria": "Acompañamientos", "precio": 250.00, "descripcion": "Crujientes aros de cebolla con salsa BBQ." },
+    { "id": 14, "nombre": "Flan Casero", "categoria": "Postres", "precio": 260.00, "descripcion": "Flan de huevo con dulce de leche y crema." },
+    { "id": 15, "nombre": "Sándwich Vegetariano", "categoria": "Vegetariano", "precio": 410.00, "descripcion": "Pan integral, palta, rúcula, tomate y queso." },
+    { "id": 16, "nombre": "Suprema de Pollo", "categoria": "Minutas", "precio": 580.00, "descripcion": "Pechuga de pollo empanada y frita." },
+    { "id": 17, "nombre": "Pizza Napolitana", "categoria": "Pizzas", "precio": 580.00, "descripcion": "Tomate, mozzarella, ajo y perejil." },
+    { "id": 18, "nombre": "Cerveza Artesanal IPA", "categoria": "Cervezas", "precio": 320.00, "descripcion": "Botella de 500ml." },
+    { "id": 19, "nombre": "Bastones de Muzzarella", "categoria": "Acompañamientos", "precio": 290.00, "descripcion": "Ocho bastones de queso con salsa de tomate." },
+    { "id": 20, "nombre": "Helado Artesanal", "categoria": "Postres", "precio": 310.00, "descripcion": "Dos bochas, sabores a elección." },
+    { "id": 21, "nombre": "Wrap de Pollo", "categoria": "Minutas", "precio": 480.00, "descripcion": "Tortilla de trigo, pollo desmenuzado, verduras y salsa." },
+    { "id": 22, "nombre": "Pizza Cuatro Quesos", "categoria": "Pizzas", "precio": 680.00, "descripcion": "Mozzarella, Roquefort, Parmesano y Fontina." },
+    { "id": 23, "nombre": "Vino Tinto Malbec", "categoria": "Vinos", "precio": 950.00, "descripcion": "Botella de 750ml, reserva." },
+    { "id": 24, "nombre": "Sopa del Día", "categoria": "Otros", "precio": 300.00, "descripcion": "Consultar variedad al mozo (ej: Calabaza)." },
+    { "id": 25, "nombre": "Brownie con Nuez", "categoria": "Postres", "precio": 290.00, "descripcion": "Brownie tibio con nueces." }
+]
 
 
-CATALOG_PATH = os.path.join("data", "catalog.json")
-
-# Estado por usuario para el catálogo
-catalog_state = {}  
-# Estructura del estado:
-# catalog_state[user] = {
-#     "page": 0,
-#     "filter": "Todos",
-#     "sort": "ASC" / "DESC" / None,
-#     "products": [...]  # copia local filtrada/ordenada
-# }
-
-
-# ──────────────────────────────────────────────
-# Cargar el catálogo desde JSON
-# ──────────────────────────────────────────────
-def load_catalog():
-    with open(CATALOG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-FULL_CATALOG = load_catalog()
-
-
-# ──────────────────────────────────────────────
-# Inicializar estado para usuario
-# ──────────────────────────────────────────────
-def init_user_catalog(user_phone):
-    catalog_state[user_phone] = {
-        "page": 0,
-        "filter": "Todos",
-        "sort": None,
-        "products": FULL_CATALOG.copy()
-    }
-
-
-# ──────────────────────────────────────────────
-# Aplicar filtros
-# ──────────────────────────────────────────────
-def apply_filter(user_phone, category):
-    state = catalog_state[user_phone]
-    state["filter"] = category
-    state["page"] = 0  # reset
-
-    if category == "Todos":
-        state["products"] = FULL_CATALOG.copy()
-    else:
-        state["products"] = [
-            p for p in FULL_CATALOG if p["categoria"] == category
-        ]
-
-
-# ──────────────────────────────────────────────
-# Ordenar productos
-# ──────────────────────────────────────────────
-def toggle_sort(user_phone):
-    state = catalog_state[user_phone]
-
-    # alternar estado
-    if state["sort"] is None or state["sort"] == "DESC":
-        state["sort"] = "ASC"
-    else:
-        state["sort"] = "DESC"
-
-    reverse = state["sort"] == "DESC"
-
-    state["products"].sort(key=lambda p: p["precio"], reverse=reverse)
-    state["page"] = 0  # reset
-
-
-# ──────────────────────────────────────────────
-# Obtener categorías disponibles
-# ──────────────────────────────────────────────
-def get_categories():
-    categorias = sorted({p["categoria"] for p in FULL_CATALOG})
-    # agregar opción Todos
-    return ["Todos"] + categorias
-
-
-# ──────────────────────────────────────────────
-# Obtener página actual (5 productos)
-# ──────────────────────────────────────────────
-def get_page(user_phone):
-    state = catalog_state[user_phone]
-    products = state["products"]
-
-    page = state["page"]
-    start = page * 5
-    end = start + 5
-
-    return products[start:end]
-
-
-# ──────────────────────────────────────────────
-# Pasar a la siguiente página
-# ──────────────────────────────────────────────
-def next_page(user_phone):
-    state = catalog_state[user_phone]
-    total = len(state["products"])
-    max_page = (total - 1) // 5
-
-    if state["page"] < max_page:
-        state["page"] += 1
-        return True
-    return False
-
-
-# ──────────────────────────────────────────────
-# Volver a página anterior
-# ──────────────────────────────────────────────
-def previous_page(user_phone):
-    state = catalog_state[user_phone]
-    if state["page"] > 0:
-        state["page"] -= 1
-        return True
-    return False
-
-
-# ──────────────────────────────────────────────
-# Volver al inicio
-# ──────────────────────────────────────────────
-def go_to_start(user_phone):
-    catalog_state[user_phone]["page"] = 0
-
-
-# ──────────────────────────────────────────────
-# Construir lista para WhatsApp (10 opciones máx.)
-# ──────────────────────────────────────────────
-def build_whatsapp_catalog_list(user_phone):
+def get_catalog():
     """
-    Devuelve un dict listo para usar en send_message()
-    {
-        "title": "...",
-        "body": "...",
-        "options": [
-            {"id": "...", "title": "...", "description": "..."}
-        ]
-    }
+    Devuelve el catálogo formateado en texto para WhatsApp.
     """
 
-    state = catalog_state[user_phone]
-    page_items = get_page(user_phone)
+    header = "📦 *Catálogo de productos*\n\n"
 
-    options = []
+    lines = []
 
-    # Opción 1-5 → productos
-    for p in page_items:
-        options.append({
-            "id": f"prod_{p['id']}",
-            "title": f"{p['nombre']} - ${p['precio']}",
-            "description": p["categoria"]
-        })
+    for item in catalog:
+        line = (
+            f"*{item['id']}. {item['nombre']}*\n"
+            f"_{item['categoria']}_ • 💵 ${item['precio']}\n"
+            f"{item['descripcion']}\n\n"
+        )
+        lines.append(line)
 
-    # Agregar Filtros
-    options.append({"id": "filter", "title": "🔎 Filtrar por categoría", "description": ""})
+    body = "".join(lines)
 
-    # Agregar Ordenar
-    sort_txt = "↑ precio menor" if state["sort"] != "ASC" else "↓ precio mayor"
-    options.append({"id": "sort", "title": f"↕ Ordenar {sort_txt}", "description": ""})
+    footer = "➡ Para agregar al carrito escribe:\n*agregar <id>*\nEjemplo: agregar 3"
 
-    # Siguientes productos
-    if next_page_exists(user_phone):
-        options.append({"id": "next", "title": "➡ Siguientes productos", "description": ""})
-
-    # Volver si page >= 1
-    if state["page"] >= 1:
-        options.append({"id": "prev", "title": "⬅ Volver", "description": ""})
-
-    # Volver al inicio si page >= 2
-    if state["page"] >= 2:
-        options.append({"id": "start", "title": "🏠 Volver al inicio", "description": ""})
-
-    return {
-        "title": "Catálogo",
-        "body": f"Página {state['page'] + 1}",
-        "options": options
-    }
-
-
-# ──────────────────────────────────────────────
-# Siguiente página disponible?
-# ──────────────────────────────────────────────
-def next_page_exists(user_phone):
-    st = catalog_state[user_phone]
-    total = len(st["products"])
-    max_page = (total - 1) // 5
-    return st["page"] < max_page
+    return header + body + footer
