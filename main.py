@@ -1,4 +1,3 @@
-# main.py
 import os
 import uvicorn
 from fastapi import FastAPI, Request
@@ -94,7 +93,6 @@ async def whatsapp_webhook(request: Request):
                 user.pending_qty = None
                 user.pending_product_id = None
 
-                send_whatsapp_text(user_number, "✔️ Producto agregado al carrito.")
                 return JSONResponse({"status": "ok"})
 
             # Comandos globales
@@ -228,7 +226,7 @@ def handle_button_reply(user_number: str, btn_id: str):
         send_edit_menu(user_number)
         return
 
-    # Carrito → Vaciar (si lo agregas)
+    # Carrito → Vaciar
     if btn_id == "cart_clear":
         CART.clear(user)
         send_whatsapp_text(user_number, "🗑 Tu carrito ha sido vaciado.")
@@ -252,5 +250,8 @@ def handle_button_reply(user_number: str, btn_id: str):
     send_whatsapp_text(user_number, "Botón no reconocido.")
 
 
+# ==========================================================
+# EJECUCIÓN
+# ==========================================================
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
