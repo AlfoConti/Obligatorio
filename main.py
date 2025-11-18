@@ -1,66 +1,79 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
-import uvicorn
-import os
-
-from utils.send_message import send_whatsapp_message
-from utils.get_type_message import get_type_message
-from algorithms.catalog_logic import CatalogLogic
-from algorithms.delivery_manager import DeliveryManager
+from utils.send_message import (
+    send_text_message,
+    send_button_message,
+    send_list_message
+)
 
 app = FastAPI()
 
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "pepito")  # tu token de Meta
+@app.get("/")
+def root():
+    return {"status": "running"}
 
-
-# ---------------------------
-# GET - TOKEN VERIFICATION
-# ---------------------------
-@app.get("/whatsapp")
-async def verify_token(request: Request):
-    params = request.query_params
-
-    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == VERIFY_TOKEN:
-        return PlainTextResponse(params.get("hub.challenge"))
-
-    return PlainTextResponse("Verification failed", status_code=403)
-
-
-# ---------------------------
-# POST - RECEIVE MESSAGES
-# ---------------------------
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
+
     body = await request.json()
 
+    # Seguridad: si no viene mensaje, ignoramos
     try:
-        entry = body["entry"][0]["changes"][0]["value"]["messages"][0]
-        message_type = get_type_message(entry)
-        phone = entry["from"]
+        entry = body["entry"][0]["changes"][0]["value"]
+        message = entry["messages"][0]
+        number = message["from"]
+    except:
+        return {"status": "ignored"}
 
-        # Ejemplo simple para testear
-        if message_type == "text":
-            text = entry["text"]["body"].lower()
+    # Caso: Botón o texto
+    text = ""
+    if message.get("text"):
+        text = message["text"]["body"].strip().lower()
 
-            if "hola" in text:
-                send_whatsapp_message("¡Hola! Soy tu bot 😄", phone)
-            else:
-                send_whatsapp_message(f"Recibí tu mensaje: {text}", phone)
+    if message.get("interactive"):
+        interactive = message["interactive"]
+        if "button_reply" in interactive:
+            text = interactive["button_reply"]["id"]
+        elif "list_reply" in interactive:
+            text = interactive["list_reply"]["id"]
 
-        return JSONResponse({"status": "ok"}, status_code=200)
+    # 🟦 PRIMER MENSAJE
+    if text == "hola" or text == "menu" or text == "":
+        send_button_message(
+            number,
+            "¡Hola! ¿Qué deseas hacer?",
+            buttons=[
+                {"id": "ver_menu", "title": "📜 Ver Menú"},
+                {"id": "hacer_pedido", "title": "🛒 Hacer Pedido"}
+            ]
+        )
+        return {"status": "sent"}
 
-    except Exception as e:
-        print("Error processing message:", e)
-        return JSONResponse({"status": "ignored"}, status_code=200)
+    # 🟧 SI ELIGE "VER MENÚ"
+    if text == "ver_menu":
+        send_list_message(
+            number,
+            header="Menú del día",
+            body="Selecciona una categoría:",
+            sections=[
+                {
+                    "title": "Comidas",
+                    "rows": [
+                        {"id": "menu_hamburguesas", "title": "🍔 Hamburguesas"},
+                        {"id": "menu_pizzas", "title": "🍕 Pizzas"},
+                    ]
+                }
+            ]
+        )
+        return {"status": "sent"}
 
+    # 🟩 SUBMENÚ: Hamburguesas
+    if text == "menu_hamburguesas":
+        send_text_message(number, "🍔 Menú Hamburguesas:\n- Clásica\n- Doble\n- BBQ")
+        return {"status": "sent"}
 
-# ---------------------------
-# ROOT
-# ---------------------------
-@app.get("/")
-async def root():
-    return {"message": "Bot WhatsApp Activo - FastAPI en Render"}
+    # 🟥 SUBMENÚ: Pizzas
+    if text == "menu_pizzas":
+        send_text_message(number, "🍕 Menú Pizzas:\n- Muzza\n- Pepperoni\n- 4 Quesos")
+        return {"status": "sent"}
 
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=3000)
+    return {"status": "unknown"}
