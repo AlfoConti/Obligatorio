@@ -1,85 +1,65 @@
 from fastapi import FastAPI, Request
-from algorithms.catalog_logic import send_product_menu, send_filter_menu
-from utils.send_message import send_text_message
+from fastapi.responses import JSONResponse, PlainTextResponse
 import uvicorn
+import os
+
+from utils.send_message import send_whatsapp_message
+from utils.get_type_message import get_type_message
+from algorithms.catalog_logic import CatalogLogic
+from algorithms.delivery_manager import DeliveryManager
 
 app = FastAPI()
 
-SESSIONS = {}
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "pepito")  # tu token de Meta
 
-@app.post("/webhook")
-async def webhook(request: Request):
-    data = await request.json()
+
+# ---------------------------
+# GET - TOKEN VERIFICATION
+# ---------------------------
+@app.get("/whatsapp")
+async def verify_token(request: Request):
+    params = request.query_params
+
+    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == VERIFY_TOKEN:
+        return PlainTextResponse(params.get("hub.challenge"))
+
+    return PlainTextResponse("Verification failed", status_code=403)
+
+
+# ---------------------------
+# POST - RECEIVE MESSAGES
+# ---------------------------
+@app.post("/whatsapp")
+async def whatsapp_webhook(request: Request):
+    body = await request.json()
 
     try:
-        message = data["entry"][0]["changes"][0]["value"]["messages"][0]
-    except:
-        return {"status": "ignored"}
+        entry = body["entry"][0]["changes"][0]["value"]["messages"][0]
+        message_type = get_type_message(entry)
+        phone = entry["from"]
 
-    number = message["from"]
+        # Ejemplo simple para testear
+        if message_type == "text":
+            text = entry["text"]["body"].lower()
 
-    if number not in SESSIONS:
-        SESSIONS[number] = {"page": 0, "category": "Todos", "order": "none"}
-        send_text_message(number, "¡Hola! Bienvenido al restaurante 🍔")
-        send_product_menu(number)
-        return {"status": "ok"}
+            if "hola" in text:
+                send_whatsapp_message("¡Hola! Soy tu bot 😄", phone)
+            else:
+                send_whatsapp_message(f"Recibí tu mensaje: {text}", phone)
 
-    msg_type = message.get("type")
+        return JSONResponse({"status": "ok"}, status_code=200)
 
-    if msg_type == "interactive":
-        inter = message["interactive"]
+    except Exception as e:
+        print("Error processing message:", e)
+        return JSONResponse({"status": "ignored"}, status_code=200)
 
-        if inter["type"] == "button_reply":
-            button_id = inter["button_reply"]["id"]
-            return {"status": "ok"}
 
-        elif inter["type"] == "list_reply":
-            selection = inter["list_reply"]["id"]
-
-            # Filtrar
-            if selection == "filter-menu":
-                send_filter_menu(number)
-                return {"status": "ok"}
-
-            # Ordenar
-            if selection == "order-price":
-                if SESSIONS[number]["order"] == "asc":
-                    SESSIONS[number]["order"] = "desc"
-                else:
-                    SESSIONS[number]["order"] = "asc"
-                send_product_menu(number)
-                return {"status": "ok"}
-
-            # Categorías
-            if selection.startswith("cat-"):
-                SESSIONS[number]["category"] = selection.replace("cat-", "")
-                SESSIONS[number]["page"] = 0
-                send_product_menu(number)
-                return {"status": "ok"}
-
-            # Navegación
-            if selection.startswith("next-"):
-                SESSIONS[number]["page"] += 1
-                send_product_menu(number)
-                return {"status": "ok"}
-
-            if selection.startswith("back-"):
-                SESSIONS[number]["page"] -= 1
-                send_product_menu(number)
-                return {"status": "ok"}
-
-            if selection == "back-home":
-                SESSIONS[number] = {"page": 0, "category": "Todos", "order": "none"}
-                send_product_menu(number)
-                return {"status": "ok"}
-
-            # Producto elegido
-            if selection.startswith("product-"):
-                prod_id = selection.replace("product-", "")
-                send_text_message(number, f"Elegiste el producto {prod_id}")
-                return {"status": "ok"}
-
-    return {"status": "ok"}
+# ---------------------------
+# ROOT
+# ---------------------------
+@app.get("/")
+async def root():
+    return {"message": "Bot WhatsApp Activo - FastAPI en Render"}
 
 
 if __name__ == "__main__":
