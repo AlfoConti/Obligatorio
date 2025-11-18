@@ -3,14 +3,12 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from algorithms.catalog_logic import send_product_menu, send_filter_menu, request_quantity
-from utils.send_message import send_text_message
-import uvicorn
 
-from whatsapp_service import (
-    send_whatsapp_buttons,
-    send_whatsapp_text,
-    send_whatsapp_list,
-)
+# CORRECCIÓN IMPORTANTE
+from utils.send_message import send_whatsapp_message as send_text_message
+
+from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text
+import uvicorn
 
 app = FastAPI()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
@@ -33,6 +31,7 @@ def get_session(user):
     return s
 
 
+# Root
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Bot activo"}
@@ -52,9 +51,7 @@ async def verify(request: Request):
     return PlainTextResponse("Verification failed", status_code=403)
 
 
-# ============================================================
-# WEBHOOK
-# ============================================================
+# Webhook Listener
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
     body = await request.json()
@@ -73,63 +70,55 @@ async def whatsapp_webhook(request: Request):
         session = get_session(user)
 
         # ----------------------------------------
-        # INTERACTIVE (botones o listas)
+        # INTERACTIVE BUTTONS / LIST RESPONSES
         # ----------------------------------------
         if msg.get("type") == "interactive":
-            inter = msg.get("interactive")
+            inter = msg.get("interactive", {})
             itype = inter.get("type")
 
+            # LIST REPLY (product list, filter, pages)
             if itype == "list_reply":
-                row_id = inter["list_reply"]["id"]
+                lr = inter.get("list_reply", {})
+                row_id = lr.get("id")
                 return await handle_list_reply(user, row_id)
 
-            if itype == "button_reply":
-                btn_id = inter["button_reply"]["id"]
+            # BUTTON REPLY (quantities, menu actions)
+            elif itype == "button_reply":
+                br = inter.get("button_reply", {})
+                btn_id = br.get("id")
                 return await handle_button_reply(user, btn_id)
 
         # ----------------------------------------
         # TEXT MESSAGES
         # ----------------------------------------
         if msg.get("type") == "text":
-            text = msg["text"]["body"].strip().lower()
+            body_text = msg.get("text", {}).get("body", "").strip().lower()
 
-            if text in ["menu", "hola", "inicio", "start"]:
+            # PALABRAS QUE ABREN EL MENÚ PRINCIPAL
+            if body_text in ["menu", "hola", "inicio", "start"]:
                 session["page"] = 0
                 session["category"] = "Todos"
                 session["sort"] = None
 
-                # -----------------------------------
-                # MENÚ INICIAL CON BOTONES
-                # -----------------------------------
-                buttons = [
-                    {"id": "menu_products", "title": "Ver Productos"},
-                    {"id": "menu_cart", "title": "Ver Carrito"},
-                    {"id": "menu_help", "title": "Ayuda"},
-                ]
+                # AQUÍ SE ENVÍAN LOS BOTONES DEL MENÚ PRINCIPAL
+                send_whatsapp_buttons(user)
 
-                send_whatsapp_buttons(
-                    user,
-                    header="Bienvenido",
-                    body="Elige una opción:",
-                    buttons=buttons,
-                )
+                return JSONResponse({"status": "buttons_sent"})
 
-                return JSONResponse({"status": "menu_sent"})
+            send_text_message(user, "Escribe *menu* para ver las opciones.")
+            return JSONResponse({"status": "text_handled"})
 
-            send_text_message(user, "Escribe *menu* para comenzar.")
-            return JSONResponse({"status": "text_ok"})
-
-        send_text_message(user, "Mensaje no soportado. Usa *menu*.")
+        send_text_message(user, "Tipo de mensaje no soportado. Usa *menu*.")
         return JSONResponse({"status": "unsupported"})
 
     except Exception as e:
-        print("Webhook ERROR:", e)
+        print("Webhook error:", e)
         return JSONResponse({"status": "error", "detail": str(e)})
 
 
-# ============================================================
-# LIST REPLY (productos, filtros, sort, paginado)
-# ============================================================
+# =====================================================
+# LIST REPLY HANDLER
+# =====================================================
 async def handle_list_reply(user, row_id):
     session = get_session(user)
 
@@ -137,7 +126,7 @@ async def handle_list_reply(user, row_id):
         prod_id = row_id.replace("prod_", "")
         session["pending_product"] = prod_id
         request_quantity(user, prod_id)
-        return JSONResponse({"status": "ask_qty"})
+        return JSONResponse({"status": "asked_qty"})
 
     if row_id == "ctl_filter":
         send_filter_menu(user)
@@ -156,63 +145,43 @@ async def handle_list_reply(user, row_id):
         return JSONResponse({"status": "sorted"})
 
     if row_id.startswith("ctl_next_"):
-        session["page"] = int(row_id.split("ctl_next_", 1)[1])
+        session["page"] = int(row_id.replace("ctl_next_", ""))
         send_product_menu(user, session)
-        return JSONResponse({"status": "next_page"})
+        return JSONResponse({"status": "next"})
 
     if row_id.startswith("ctl_prev_"):
-        session["page"] = int(row_id.split("ctl_prev_", 1)[1])
+        session["page"] = int(row_id.replace("ctl_prev_", ""))
         send_product_menu(user, session)
-        return JSONResponse({"status": "prev_page"})
+        return JSONResponse({"status": "prev"})
 
     if row_id.startswith("cat_"):
-        session["category"] = row_id.replace("cat_", "")
+        cat = row_id.replace("cat_", "")
+        session["category"] = cat
         session["page"] = 0
         send_product_menu(user, session)
-        return JSONResponse({"status": "category_set"})
+        return JSONResponse({"status": "category"})
 
     send_text_message(user, "Opción no reconocida.")
     return JSONResponse({"status": "unknown"})
 
 
-# ============================================================
-# BUTTON REPLY (cantidades + menú inicial)
-# ============================================================
+# =====================================================
+# BUTTON REPLY HANDLER
+# =====================================================
 async def handle_button_reply(user, btn_id):
     session = get_session(user)
 
-    # ---------------------------
-    # CANTIDAD
-    # ---------------------------
+    # qty pattern: qty_PRODUCTO_3
     if btn_id.startswith("qty_"):
         _, prod_id, qty = btn_id.split("_")
         qty = int(qty)
 
         session["cart"].append({"product_id": prod_id, "qty": qty})
 
-        lines = [f"{x['product_id']} x{x['qty']}" for x in session["cart"]]
-        send_text_message(user, "🛒 *Carrito:*\n" + "\n".join(lines))
+        lines = [f"{item['product_id']} x{item['qty']}" for item in session["cart"]]
+        send_text_message(user, "🛒 *Carrito actual:*\n" + "\n".join(lines))
 
-        return JSONResponse({"status": "added_to_cart"})
-
-    # ---------------------------
-    # MENÚ PRINCIPAL
-    # ---------------------------
-    if btn_id == "menu_products":
-        send_product_menu(user, session)
-        return JSONResponse({"status": "open_products"})
-
-    if btn_id == "menu_cart":
-        if not session["cart"]:
-            send_text_message(user, "Tu carrito está vacío.")
-        else:
-            lines = [f"{x['product_id']} x{x['qty']}" for x in session["cart"]]
-            send_text_message(user, "🛒 *Carrito actual:*\n" + "\n".join(lines))
-        return JSONResponse({"status": "cart_open"})
-
-    if btn_id == "menu_help":
-        send_text_message(user, "Usa *menu* para empezar.")
-        return JSONResponse({"status": "help"})
+        return JSONResponse({"status": "added"})
 
     send_text_message(user, "Botón no reconocido.")
     return JSONResponse({"status": "unknown_button"})
