@@ -25,6 +25,7 @@ PAGE_SIZE = 5
 with open(CATALOG_PATH, "r", encoding="utf-8") as f:
     PRODUCTS = json.load(f)
 
+
 def find_product(pid):
     for p in PRODUCTS:
         if str(p["id"]) == str(pid):
@@ -86,7 +87,6 @@ def make_menu_sections(products_page, user):
     })
 
     # Paginación
-    products_total = len(products_page)
     page = user.page
 
     if (page + 1) * PAGE_SIZE < len(user._filtered):
@@ -114,16 +114,15 @@ def make_menu_sections(products_page, user):
 def send_product_menu(number: str):
     user = USERS.get(number)
 
-    # filtrar + ordenar
     filtered = filter_products(user.category)
     sorted_products = sort_products(filtered, user.sort)
-    user._filtered = sorted_products  # cache
 
-    # paginado
+    user._filtered = sorted_products
+
     start = user.page * PAGE_SIZE
-    products_page = sorted_products[start:start + PAGE_SIZE]
+    page_items = sorted_products[start:start + PAGE_SIZE]
 
-    sections = make_menu_sections(products_page, user)
+    sections = make_menu_sections(page_items, user)
 
     return send_whatsapp_list(
         number,
@@ -174,13 +173,13 @@ def request_quantity(number: str, prod_id: str):
 
     return send_whatsapp_buttons(
         number,
-        header=f"{product['nombre']}",
+        header=product["nombre"],
         body="Selecciona una cantidad:",
         buttons=buttons
     )
 
 
-# ================ PEDIR NOTA OPCIONAL =================
+# ================ PEDIR NOTA =================
 
 def ask_for_note(number: str):
     user = USERS.get(number)
@@ -188,8 +187,8 @@ def ask_for_note(number: str):
 
     return send_whatsapp_text(
         number,
-        "¿Quieres agregar una nota a este producto? (ej: 'sin tomate')\n"
-        "Si no deseas nota, responde: *no*"
+        "¿Quieres agregar una nota? (ej: “sin tomate”)\n"
+        "Si no deseas nota, escribe: *no*"
     )
 
 
@@ -204,10 +203,87 @@ def save_cart_line(number: str, note: str = ""):
 
     CART.add(user, prod, user.pending_qty, note)
 
-    # reiniciar estado
+    # reset
     user.pending_product_id = None
     user.pending_qty = None
     USERS.set_state(number, "browsing")
 
-    # enviar carrito
-    return send_whatsapp_text(number, CART.format(user))
+    return send_cart(number)
+
+
+# ============================================================
+#                     MOSTRAR CARRITO
+# ============================================================
+
+def send_cart(number: str):
+    """
+    Muestra el carrito + botones para editar.
+    """
+    user = USERS.get(number)
+
+    text = CART.format(user)
+
+    buttons = [
+        {"id": "cart_edit", "title": "🛠 Editar carrito"},
+        {"id": "cart_clear", "title": "🗑 Vaciar carrito"},
+    ]
+
+    return send_whatsapp_buttons(
+        number,
+        header="Tu Carrito",
+        body=text,
+        buttons=buttons
+    )
+
+
+# ============================================================
+#                 MENÚ PARA EDITAR CARRITO
+# ============================================================
+
+def send_edit_menu(number: str):
+    user = USERS.get(number)
+
+    if not user.cart:
+        return send_whatsapp_text(number, "🛒 Tu carrito está vacío.")
+
+    rows = []
+
+    for idx, item in enumerate(user.cart):
+        prod = item["product"]
+        rows.append({
+            "id": f"edit_{idx}",
+            "title": prod["nombre"],
+            "description": f"Cantidad: {item['qty']}"
+        })
+
+    return send_whatsapp_list(
+        number,
+        header="Editar carrito",
+        body="Selecciona un producto:",
+        sections=[{
+            "title": "Productos en tu carrito",
+            "rows": rows
+        }]
+    )
+
+
+# ============================================================
+#           ACCIONES SOBRE UN PRODUCTO (EDITAR/BORRAR)
+# ============================================================
+
+def send_edit_actions(number: str, index: int):
+    user = USERS.get(number)
+    item = user.cart[index]
+    prod = item["product"]
+
+    buttons = [
+        {"id": f"edit_qty_{index}", "title": "Cambiar cantidad"},
+        {"id": f"edit_rm_{index}", "title": "❌ Quitar"},
+    ]
+
+    return send_whatsapp_buttons(
+        number,
+        header=prod["nombre"],
+        body="¿Qué acción deseas realizar?",
+        buttons=buttons
+    )

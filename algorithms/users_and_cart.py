@@ -3,9 +3,10 @@
 import time
 from typing import Dict, List, Optional
 
-# ============================================
-#   MODELO DE USUARIO
-# ============================================
+
+# ============================================================
+#                    MODELO DE USUARIO
+# ============================================================
 
 class User:
     def __init__(self, number: str):
@@ -17,39 +18,48 @@ class User:
 
         # Estado conversacional
         self.state = "idle"
-        # idle, browsing, adding_qty, adding_note, checkout_address, waiting_location
+        # states:
+        # - idle
+        # - browsing
+        # - adding_qty
+        # - adding_note
+        # - editing
+        # - checkout_address
+        # - waiting_location
 
-        # Catálogo (paginación / filtros)
+        # Catálogo: filtros / orden / paginado
         self.category = "Todos"
         self.sort = None
         self.page = 0
+        self._filtered = []
 
-        # Flujo de compra
+        # Flujo de compra temporal
         self.pending_product_id: Optional[str] = None
         self.pending_qty: Optional[int] = None
 
         # Carrito
+        # Cada item es:
+        # {
+        #    "product": dict,
+        #    "qty": int,
+        #    "note": str
+        # }
         self.cart: List[dict] = []
 
 
-# ============================================
-#   MANEJO DE USUARIOS
-# ============================================
+# ============================================================
+#                       USER MANAGER
+# ============================================================
 
 class UserManager:
     def __init__(self):
         self.users: Dict[str, User] = {}
 
     def get(self, number: str) -> User:
+        """Obtiene un usuario, o lo crea si es nuevo."""
         if number not in self.users:
             self.users[number] = User(number)
         return self.users[number]
-
-    def reset_catalog_flow(self, number: str):
-        u = self.get(number)
-        u.page = 0
-        u.category = "Todos"
-        u.sort = None
 
     def set_state(self, number: str, state: str):
         self.get(number).state = state
@@ -57,81 +67,128 @@ class UserManager:
     def get_state(self, number: str) -> str:
         return self.get(number).state
 
+    def reset_catalog_flow(self, number: str):
+        u = self.get(number)
+        u.page = 0
+        u.category = "Todos"
+        u.sort = None
+        u._filtered = []
+
     def set_pending_product(self, number: str, prod_id: str):
         u = self.get(number)
         u.pending_product_id = prod_id
         u.pending_qty = None
 
 
-# ============================================
-#   CARRITO (al estilo Zustand/Redux)
-# ============================================
+# ============================================================
+#                         CART MANAGER
+# ============================================================
 
 class CartManager:
     def __init__(self):
         pass
 
-    # helper: lectura segura de nombre / precio con fallback
+    # -------------------------------
+    # Helpers para obtener nombre/price
+    # -------------------------------
+
     def _get_product_name(self, product: dict) -> str:
-        return product.get("name") or product.get("nombre") or f"Producto-{product.get('id', '')}"
+        return (
+            product.get("nombre")
+            or product.get("name")
+            or f"Producto-{product.get('id','')}"
+        )
 
     def _get_product_price(self, product: dict) -> float:
-        # intenta varias claves y convierte a float
-        for k in ("price", "precio", "cost"):
+        # intenta varias claves
+        for k in ("precio", "price", "cost"):
             if k in product:
                 try:
                     return float(product[k])
-                except Exception:
+                except:
                     try:
-                        # si estaba en string con coma
                         return float(str(product[k]).replace(",", "."))
-                    except Exception:
+                    except:
                         return 0.0
         return 0.0
 
+    # -------------------------------
+    # Add
+    # -------------------------------
+
     def add(self, user: User, product: dict, qty: int, note: str = "") -> dict:
+        """Agrega producto al carrito."""
         name = self._get_product_name(product)
         price = self._get_product_price(product)
+
         line = {
-            "id": product.get("id"),
-            "name": name,
-            "price": price,
+            "product": product,
             "qty": int(qty),
-            "note": note,
+            "note": note.strip(),
             "subtotal": round(price * int(qty), 2)
         }
+
         user.cart.append(line)
         return line
 
-    def remove(self, user: User, product_id: str) -> bool:
-        before = len(user.cart)
-        user.cart = [item for item in user.cart if str(item.get("id")) != str(product_id)]
-        return len(user.cart) < before
+    # -------------------------------
+    # Remove por índice
+    # -------------------------------
+
+    def remove(self, user: User, index: int) -> bool:
+        if 0 <= index < len(user.cart):
+            user.cart.pop(index)
+            return True
+        return False
+
+    # -------------------------------
+    # Clear
+    # -------------------------------
 
     def clear(self, user: User):
         user.cart = []
 
+    # -------------------------------
+    # Total
+    # -------------------------------
+
     def total(self, user: User) -> float:
         return round(sum(item.get("subtotal", 0) for item in user.cart), 2)
+
+    # -------------------------------
+    # Get raw
+    # -------------------------------
 
     def get(self, user: User):
         return user.cart
 
+    # -------------------------------
+    # Format carrito
+    # -------------------------------
+
     def format(self, user: User) -> str:
         cart = user.cart
+
         if not cart:
             return "🛒 Tu carrito está vacío."
 
-        msg = "🛒 *Tu carrito:*\n\n"
-        for item in cart:
+        msg = "🛒 *Tu carrito:*\n"
+
+        for idx, item in enumerate(cart, start=1):
+            product = item["product"]
+            name = self._get_product_name(product)
+            price = self._get_product_price(product)
+
             msg += (
-                f"*{item.get('name')}*\n"
-                f"Cantidad: {item.get('qty')} – Precio: ${item.get('price')}\n"
-                f"Subtotal: ${item.get('subtotal')}\n"
+                f"\n*{idx}) {name}*\n"
+                f"Cantidad: {item['qty']}\n"
+                f"Precio: ${price:.2f}\n"
+                f"Subtotal: ${item['subtotal']:.2f}\n"
             )
-            if item.get("note"):
-                msg += f"_Nota:_ {item.get('note')}\n"
-            msg += "----\n"
+
+            if item["note"]:
+                msg += f"📝 Nota: {item['note']}\n"
 
         msg += f"\n💰 *Total: ${self.total(user)}*"
+
         return msg
