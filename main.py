@@ -3,7 +3,12 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 
-from algorithms.catalog_logic import send_product_menu, send_filter_menu, request_quantity
+from algorithms.catalog_logic import (
+    send_product_menu,
+    send_filter_menu,
+    request_quantity
+)
+
 from utils.send_message import send_whatsapp_message as send_text_message
 from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text
 
@@ -12,9 +17,10 @@ import uvicorn
 app = FastAPI()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
 
-# ----------------------------------------
+
+# ==========================================
 # SESIONES EN MEMORIA
-# ----------------------------------------
+# ==========================================
 SESSIONS = {}
 
 def get_session(user):
@@ -30,17 +36,17 @@ def get_session(user):
     return SESSIONS[user]
 
 
-# ----------------------------------------
+# ==========================================
 # ROOT
-# ----------------------------------------
+# ==========================================
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Bot activo"}
 
 
-# ----------------------------------------
-# VERIFICACIÓN META
-# ----------------------------------------
+# ==========================================
+# WEBHOOK VERIFICATION (META)
+# ==========================================
 @app.get("/whatsapp")
 async def verify(request: Request):
     params = request.query_params
@@ -54,9 +60,9 @@ async def verify(request: Request):
     return PlainTextResponse("Verification failed", status_code=403)
 
 
-# ----------------------------------------
+# ==========================================
 # WEBHOOK POST
-# ----------------------------------------
+# ==========================================
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
     try:
@@ -75,28 +81,26 @@ async def whatsapp_webhook(request: Request):
         user = msg.get("from")
         session = get_session(user)
 
-        # ----------------------------------------
-        # INTERACTIVE (botones o listas)
-        # ----------------------------------------
+        # ------------------------------------------------
+        # MENSAJES INTERACTIVOS (Botones / Listas)
+        # ------------------------------------------------
         if msg.get("type") == "interactive":
-            inter = msg.get("interactive", {})
-            itype = inter.get("type")
+            inter = msg["interactive"]
+            itype = inter["type"]
 
             if itype == "list_reply":
-                row_id = inter["list_reply"]["id"]
-                return await handle_list_reply(user, row_id)
+                return await handle_list_reply(user, inter["list_reply"]["id"])
 
             if itype == "button_reply":
-                btn_id = inter["button_reply"]["id"]
-                return await handle_button_reply(user, btn_id)
+                return await handle_button_reply(user, inter["button_reply"]["id"])
 
-        # ----------------------------------------
-        # TEXTO NORMAL
-        # ----------------------------------------
+        # ------------------------------------------------
+        # MENSAJES DE TEXTO NORMAL
+        # ------------------------------------------------
         if msg.get("type") == "text":
-            body_text = msg.get("text", {}).get("body", "").lower().strip()
+            txt = msg["text"]["body"].lower().strip()
 
-            if body_text in ["hola", "menu", "inicio", "start"]:
+            if txt in ["hola", "menu", "inicio", "start", "catalogo"]:
                 send_whatsapp_buttons(
                     user,
                     header="Menú principal",
@@ -109,33 +113,36 @@ async def whatsapp_webhook(request: Request):
                 )
                 return JSONResponse({"status": "menu_sent"})
 
-            send_text_message(user, "No entendí. Escribe *menu* para comenzar.")
+            send_text_message(user, "No entendí 🤖. Escribe *menu* para comenzar.")
             return JSONResponse({"status": "unknown_text"})
 
         send_text_message(user, "Escribe *menu* para comenzar.")
         return JSONResponse({"status": "unsupported_type"})
 
     except Exception as e:
-        print("Webhook error:", e)
+        print("❌ Error en webhook:", e)
         return JSONResponse({"status": "error", "detail": str(e)})
 
 
-# ----------------------------------------
+# ==========================================================
 # HANDLER LISTAS
-# ----------------------------------------
+# ==========================================================
 async def handle_list_reply(user, row_id):
     session = get_session(user)
 
+    # Producto seleccionado
     if row_id.startswith("prod_"):
         prod_id = row_id.replace("prod_", "")
         session["pending_product"] = prod_id
         request_quantity(user, prod_id)
-        return JSONResponse({"status": "asking_qty"})
+        return JSONResponse({"status": "qty_requested"})
 
+    # Filtros
     if row_id == "ctl_filter":
         send_filter_menu(user)
-        return JSONResponse({"status": "filter"})
+        return JSONResponse({"status": "filter_menu"})
 
+    # Ordenamiento
     if row_id == "ctl_sort":
         session["sort"] = (
             "asc" if session["sort"] is None else
@@ -145,6 +152,7 @@ async def handle_list_reply(user, row_id):
         send_product_menu(user, session)
         return JSONResponse({"status": "sorted"})
 
+    # Paginación
     if row_id.startswith("ctl_next_"):
         session["page"] = int(row_id.replace("ctl_next_", ""))
         send_product_menu(user, session)
@@ -155,32 +163,30 @@ async def handle_list_reply(user, row_id):
         send_product_menu(user, session)
         return JSONResponse({"status": "prev_page"})
 
+    # Cambiar categoría
     if row_id.startswith("cat_"):
         session["category"] = row_id.replace("cat_", "")
         session["page"] = 0
         send_product_menu(user, session)
-        return JSONResponse({"status": "category_change"})
+        return JSONResponse({"status": "category_changed"})
 
     send_text_message(user, "Opción no reconocida.")
     return JSONResponse({"status": "unknown_list"})
 
 
-# ----------------------------------------
-# HANDLER BOTONES (ARREGLADO)
-# ----------------------------------------
+# ==========================================================
+# HANDLER BOTONES
+# ==========================================================
 async def handle_button_reply(user, btn_id):
     session = get_session(user)
 
-    # ----------------------------------------
-    # BOTÓN: VER CATÁLOGO
-    # ----------------------------------------
+    # Catálogo
     if btn_id == "btn_catalogo":
+        session["page"] = 0
         send_product_menu(user, session)
         return JSONResponse({"status": "catalog_sent"})
 
-    # ----------------------------------------
-    # BOTÓN: VER CARRITO
-    # ----------------------------------------
+    # Carrito
     if btn_id == "btn_carrito":
         if not session["cart"]:
             send_whatsapp_text(user, "🛒 Tu carrito está vacío.")
@@ -192,16 +198,12 @@ async def handle_button_reply(user, btn_id):
             send_whatsapp_text(user, f"🛒 *Tu carrito:*\n{cart_lines}")
         return JSONResponse({"status": "cart_sent"})
 
-    # ----------------------------------------
-    # BOTÓN: INFORMACIÓN
-    # ----------------------------------------
+    # Información
     if btn_id == "btn_info":
         send_whatsapp_text(user, "ℹ️ Somos una tienda online. ¿Qué necesitas?")
         return JSONResponse({"status": "info_sent"})
 
-    # ----------------------------------------
-    # BOTÓN: CANTIDADES
-    # ----------------------------------------
+    # Botones de cantidad
     if btn_id.startswith("qty_"):
         _, prod_id, qty = btn_id.split("_")
         qty = int(qty)
@@ -212,6 +214,7 @@ async def handle_button_reply(user, btn_id):
             f"{item['product_id']} x{item['qty']}"
             for item in session["cart"]
         )
+
         send_whatsapp_text(user, f"🛒 *Carrito actualizado:*\n{cart_lines}")
 
         return JSONResponse({"status": "qty_added"})
@@ -220,8 +223,8 @@ async def handle_button_reply(user, btn_id):
     return JSONResponse({"status": "unknown_button"})
 
 
-# ----------------------------------------
-# LOCAL RUN
-# ----------------------------------------
+# ==========================================
+# LOCAL RUN (DEV)
+# ==========================================
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
