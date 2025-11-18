@@ -1,71 +1,43 @@
+# utils/send_message.py
 import os
 import requests
 import json
 
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
-API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
+# Token que pediste que esté presente (si querés usar env vars, reemplaza aquí).
+ACCESS_TOKEN = "EAALZCWMF3l0cBP4ZBZCUAZBaHpco2fgDuX76oZCKiEmTFjROjRuV0ZB8rVPkFq9hWkOYgrTzZAr4vx5nQXiDq0YyVt6JrF7qiC6wxFiTHrZB8MF6NpVyFKZC99N1i2w2zZAtYpu6QNxv8lTGTDzDFnZBZC9ZAHZAzB22lgSP4c7omSsNUwYiqN1G6YbMDyAZArSxZAYFgQZDZD"
+# Cambiá por el ID de tu número (o usa variable de entorno PHONE_NUMBER_ID)
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "846928765173274")
+GRAPH_VERSION = os.environ.get("GRAPH_VERSION", "v19.0")
 
-# Construimos automáticamente la URL
-WHATSAPP_API_URL = f"https://graph.facebook.com/{API_VERSION}/{PHONE_ID}/messages"
+BASE_URL = f"https://graph.facebook.com/{GRAPH_VERSION}/{PHONE_NUMBER_ID}/messages"
 
+HEADERS = {
+    "Authorization": f"Bearer {ACCESS_TOKEN}",
+    "Content-Type": "application/json"
+}
 
-def send_message(payload: dict):
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    print("Sending to:", WHATSAPP_API_URL)
-    print("Payload:", payload)
-
-    response = requests.post(WHATSAPP_API_URL, headers=headers, data=json.dumps(payload))
-    print("Response:", response.text)
-    return response
-
-
-def send_text_message(to: str, text: str):
-    payload = {
+def send_whatsapp_message(to, message_text):
+    """
+    Envía texto simple.
+    'to' debe ser el número en formato internacional sin '+' (ej: 59891234567)
+    """
+    body = {
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
-        "text": {"body": text}
+        "text": {"body": message_text}
     }
-    return send_message(payload)
+    try:
+        r = requests.post(BASE_URL, headers=HEADERS, json=body, timeout=10)
+        print("send_whatsapp_message:", r.status_code, r.text)
+        return r.status_code, r.text
+    except Exception as e:
+        print("Error al enviar mensaje:", e)
+        return None, str(e)
 
+# retrocompatibilidad con el nombre que usa main
+def send_whatsapp_message_wrapper(to, message_text):
+    return send_whatsapp_message(to, message_text)
 
-def send_button_message(to: str, body: str, buttons: list):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {"text": body},
-            "action": {"buttons": [
-                {
-                    "type": "reply",
-                    "reply": {"id": b["id"], "title": b["title"]}
-                } for b in buttons
-            ]}
-        }
-    }
-    return send_message(payload)
-
-
-def send_list_message(to: str, header: str, body: str, sections: list):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "list",
-            "header": {"type": "text", "text": header},
-            "body": {"text": body},
-            "action": {
-                "sections": sections,
-                "button": "Ver opciones"
-            }
-        }
-    }
-    return send_message(payload)
+# Export simple name used in main: send_whatsapp_message
+send_whatsapp_message = send_whatsapp_message
