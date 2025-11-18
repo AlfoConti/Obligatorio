@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 from algorithms.catalog_logic import get_catalog, get_categories
 
 app = FastAPI()
 
-# CORS (necesario para permitir llamadas desde tu frontend)
+# === CORS ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,18 +18,21 @@ app.add_middleware(
 def home():
     return {"message": "API funcionando correctamente"}
 
-# === ENDPOINT CATÁLOGO ===
 @app.get("/catalog")
 def catalog():
-    """
-    Devuelve todos los productos del catálogo.
-    """
     return get_catalog()
 
-# === ENDPOINT CATEGORÍAS ===
 @app.get("/categories")
 def categories():
-    """
-    Devuelve las categorías únicas.
-    """
     return get_categories()
+
+
+# === ESTE BLOQUE ES OBLIGATORIO PARA RENDER ===
+# SIN ESTO LA APP SE CIERRA Y DA "Application exited early"
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=10000,
+        reload=False
+    )
