@@ -1,52 +1,44 @@
 # main.py
 import os
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 
+# funciones de catálogo (usan USERS y CART internamente)
 from algorithms.catalog_logic import (
     send_product_menu,
     send_filter_menu,
-    request_quantity
+    request_quantity,
+    ask_for_note,
+    save_cart_line,
+    find_product,
+    USERS,   # gestor de usuarios (UserManager)
+    CART     # gestor de carrito (CartManager)
 )
 
-from utils.send_message import send_whatsapp_message as send_text_message
+# funciones de envío (whatsapp)
 from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text
-
-import uvicorn
 
 app = FastAPI()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
 
 
-# ==========================================
-# SESIONES EN MEMORIA
-# ==========================================
-SESSIONS = {}
-
-def get_session(user):
-    if user not in SESSIONS:
-        SESSIONS[user] = {
-            "page": 0,
-            "category": "Todos",
-            "sort": None,
-            "cart": [],
-            "_filtered_products_cache": None,
-            "pending_product": None
-        }
-    return SESSIONS[user]
+# ---------------------------
+# Helpers
+# ---------------------------
+def get_user_obj(number: str):
+    """Devuelve el objeto User (gestor USERS)."""
+    return USERS.get(number)
 
 
-# ==========================================
-# ROOT
-# ==========================================
+# ---------------------------
+# Root & Verification (Meta)
+# ---------------------------
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Bot activo"}
 
 
-# ==========================================
-# WEBHOOK VERIFICATION (META)
-# ==========================================
 @app.get("/whatsapp")
 async def verify(request: Request):
     params = request.query_params
@@ -60,9 +52,9 @@ async def verify(request: Request):
     return PlainTextResponse("Verification failed", status_code=403)
 
 
-# ==========================================
-# WEBHOOK POST
-# ==========================================
+# ---------------------------
+# Webhook receiver
+# ---------------------------
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
     try:
@@ -74,49 +66,69 @@ async def whatsapp_webhook(request: Request):
         value = changes.get("value", {})
         messages = value.get("messages", [])
 
+        # nothing to do
         if not messages:
             return JSONResponse({"status": "no_messages"})
 
         msg = messages[0]
-        user = msg.get("from")
-        session = get_session(user)
+        user_number = msg.get("from")
+        user = get_user_obj(user_number)
 
-        # ------------------------------------------------
-        # MENSAJES INTERACTIVOS (Botones / Listas)
-        # ------------------------------------------------
+        # -----------------------
+        # Interactive messages
+        # -----------------------
         if msg.get("type") == "interactive":
-            inter = msg["interactive"]
-            itype = inter["type"]
+            inter = msg.get("interactive", {})
+            itype = inter.get("type")
 
             if itype == "list_reply":
-                return await handle_list_reply(user, inter["list_reply"]["id"])
+                row_id = inter["list_reply"]["id"]
+                return await handle_list_reply(user_number, row_id)
 
             if itype == "button_reply":
-                return await handle_button_reply(user, inter["button_reply"]["id"])
+                btn_id = inter["button_reply"]["id"]
+                return await handle_button_reply(user_number, btn_id)
 
-        # ------------------------------------------------
-        # MENSAJES DE TEXTO NORMAL
-        # ------------------------------------------------
+        # -----------------------
+        # Text messages
+        # -----------------------
         if msg.get("type") == "text":
-            txt = msg["text"]["body"].lower().strip()
+            text = msg.get("text", {}).get("body", "").strip()
 
-            if txt in ["hola", "menu", "inicio", "start", "catalogo"]:
+            # If user is in 'adding_note' state, capture the note
+            if user.state == "adding_note":
+                note_text = text.strip()
+                if note_text.lower() == "no":
+                    note_text = ""
+                # save the cart line (this function uses USERS and CART)
+                resp = save_cart_line(user_number, note_text)
+                # save_cart_line already sends a message with the cart via send_whatsapp_text.
+                return JSONResponse({"status": "note_saved"})
+
+            # If user is in other special states you may handle here (e.g., waiting_location)
+            # For now, fallback to main commands:
+            txt_low = text.lower()
+            if txt_low in ["hola", "menu", "inicio", "start", "catalogo"]:
                 send_whatsapp_buttons(
-                    user,
+                    user_number,
                     header="Menú principal",
                     body="Selecciona una opción:",
                     buttons=[
                         {"id": "btn_catalogo", "title": "Ver catálogo"},
                         {"id": "btn_carrito", "title": "Ver carrito"},
-                        {"id": "btn_info", "title": "Información"}
-                    ]
+                        {"id": "btn_info", "title": "Información"},
+                    ],
                 )
+                # reset catalog navigation state
+                USERS.reset_catalog_flow(user_number)
                 return JSONResponse({"status": "menu_sent"})
 
-            send_text_message(user, "No entendí 🤖. Escribe *menu* para comenzar.")
+            # fallback message
+            send_whatsapp_text(user_number, "No entendí 🤖. Escribe *menu* para comenzar.")
             return JSONResponse({"status": "unknown_text"})
 
-        send_text_message(user, "Escribe *menu* para comenzar.")
+        # If unhandled type
+        send_whatsapp_text(user_number, "Escribe *menu* para comenzar.")
         return JSONResponse({"status": "unsupported_type"})
 
     except Exception as e:
@@ -124,107 +136,96 @@ async def whatsapp_webhook(request: Request):
         return JSONResponse({"status": "error", "detail": str(e)})
 
 
-# ==========================================================
-# HANDLER LISTAS
-# ==========================================================
-async def handle_list_reply(user, row_id):
-    session = get_session(user)
+# ---------------------------
+# List reply handler
+# ---------------------------
+async def handle_list_reply(user_number: str, row_id: str):
+    user = get_user_obj(user_number)
 
-    # Producto seleccionado
+    # Producto seleccionado -> pedir cantidad (botones)
     if row_id.startswith("prod_"):
         prod_id = row_id.replace("prod_", "")
-        session["pending_product"] = prod_id
-        request_quantity(user, prod_id)
-        return JSONResponse({"status": "qty_requested"})
+        USERS.set_pending_product(user_number, prod_id)
+        USERS.set_state(user_number, "adding_qty")
+        return request_quantity(user_number, prod_id)
 
-    # Filtros
+    # Filtrar -> mostrar menú de filtros
     if row_id == "ctl_filter":
-        send_filter_menu(user)
-        return JSONResponse({"status": "filter_menu"})
+        return send_filter_menu(user_number)
 
-    # Ordenamiento
+    # Ordenar -> toggle asc/desc/none
     if row_id == "ctl_sort":
-        session["sort"] = (
-            "asc" if session["sort"] is None else
-            "desc" if session["sort"] == "asc" else
-            None
-        )
-        send_product_menu(user, session)
-        return JSONResponse({"status": "sorted"})
+        new_sort = "asc" if user.sort is None else ("desc" if user.sort == "asc" else None)
+        USERS.set_state(user_number, "browsing")
+        user.sort = new_sort
+        # reset page to 0 when changing sort
+        user.page = 0
+        return send_product_menu(user_number)
 
-    # Paginación
+    # Paginación siguiente
     if row_id.startswith("ctl_next_"):
-        session["page"] = int(row_id.replace("ctl_next_", ""))
-        send_product_menu(user, session)
-        return JSONResponse({"status": "next_page"})
+        page = int(row_id.replace("ctl_next_", ""))
+        user.page = page
+        return send_product_menu(user_number)
 
+    # Paginación anterior
     if row_id.startswith("ctl_prev_"):
-        session["page"] = int(row_id.replace("ctl_prev_", ""))
-        send_product_menu(user, session)
-        return JSONResponse({"status": "prev_page"})
+        page = int(row_id.replace("ctl_prev_", ""))
+        user.page = page
+        return send_product_menu(user_number)
 
-    # Cambiar categoría
+    # Categoría seleccionada
     if row_id.startswith("cat_"):
-        session["category"] = row_id.replace("cat_", "")
-        session["page"] = 0
-        send_product_menu(user, session)
-        return JSONResponse({"status": "category_changed"})
+        cat = row_id.replace("cat_", "")
+        user.category = cat
+        user.page = 0
+        return send_product_menu(user_number)
 
-    send_text_message(user, "Opción no reconocida.")
+    send_whatsapp_text(user_number, "Opción no reconocida.")
     return JSONResponse({"status": "unknown_list"})
 
 
-# ==========================================================
-# HANDLER BOTONES
-# ==========================================================
-async def handle_button_reply(user, btn_id):
-    session = get_session(user)
+# ---------------------------
+# Button reply handler
+# ---------------------------
+async def handle_button_reply(user_number: str, btn_id: str):
+    user = get_user_obj(user_number)
 
-    # Catálogo
+    # Mostrar catálogo
     if btn_id == "btn_catalogo":
-        session["page"] = 0
-        send_product_menu(user, session)
-        return JSONResponse({"status": "catalog_sent"})
+        USERS.reset_catalog_flow(user_number)
+        return send_product_menu(user_number)
 
-    # Carrito
+    # Ver carrito
     if btn_id == "btn_carrito":
-        if not session["cart"]:
-            send_whatsapp_text(user, "🛒 Tu carrito está vacío.")
-        else:
-            cart_lines = "\n".join(
-                f"{item['product_id']} x{item['qty']}"
-                for item in session["cart"]
-            )
-            send_whatsapp_text(user, f"🛒 *Tu carrito:*\n{cart_lines}")
-        return JSONResponse({"status": "cart_sent"})
+        cart_text = CART.format(user)
+        return send_whatsapp_text(user_number, cart_text)
 
     # Información
     if btn_id == "btn_info":
-        send_whatsapp_text(user, "ℹ️ Somos una tienda online. ¿Qué necesitas?")
-        return JSONResponse({"status": "info_sent"})
+        return send_whatsapp_text(user_number, "ℹ️ Somos una tienda online. ¿Qué necesitas?")
 
-    # Botones de cantidad
+    # Botones de cantidad: cuando usuario presiona qty_PRODUCTO_N
     if btn_id.startswith("qty_"):
-        _, prod_id, qty = btn_id.split("_")
-        qty = int(qty)
+        try:
+            _, prod_id, qty_s = btn_id.split("_")
+            qty = int(qty_s)
+        except Exception:
+            return send_whatsapp_text(user_number, "Formato de cantidad inválido.")
 
-        session["cart"].append({"product_id": prod_id, "qty": qty})
+        # store pending qty and ask for note
+        USERS.get(user_number).pending_qty = qty
+        USERS.set_state(user_number, "adding_note")
 
-        cart_lines = "\n".join(
-            f"{item['product_id']} x{item['qty']}"
-            for item in session["cart"]
-        )
+        # ask for optional note
+        return ask_for_note(user_number)
 
-        send_whatsapp_text(user, f"🛒 *Carrito actualizado:*\n{cart_lines}")
-
-        return JSONResponse({"status": "qty_added"})
-
-    send_whatsapp_text(user, "Botón no reconocido.")
-    return JSONResponse({"status": "unknown_button"})
+    # fallback
+    return send_whatsapp_text(user_number, "Botón no reconocido.")
 
 
-# ==========================================
-# LOCAL RUN (DEV)
-# ==========================================
+# ---------------------------
+# Local run
+# ---------------------------
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
