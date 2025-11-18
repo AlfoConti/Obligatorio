@@ -4,7 +4,7 @@ from utils.send_message import send_text_message, send_button_message, send_list
 
 app = FastAPI()
 
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")  # Para el webhook de Meta
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
 
 
 @app.get("/")
@@ -12,8 +12,8 @@ async def home():
     return {"status": "ok", "message": "Bot WhatsApp funcionando"}
 
 
-# ---------- WEBHOOK VERIFICACIÓN META ----------
-@app.get("/webhook")
+# ========= VERIFICACIÓN DEL WEBHOOK =========
+@app.get("/whatsapp")
 async def verify(request: Request):
     params = request.query_params
     mode = params.get("hub.mode")
@@ -22,12 +22,13 @@ async def verify(request: Request):
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
         return int(challenge)
+
     return {"error": "Token inválido"}
 
 
-# ---------- RECEPCIÓN DE MENSAJES ----------
-@app.post("/webhook")
-async def webhook_listener(request: Request):
+# ========= RECEPCIÓN DE MENSAJES =========
+@app.post("/whatsapp")
+async def whatsapp_webhook(request: Request):
     data = await request.json()
 
     try:
@@ -39,61 +40,56 @@ async def webhook_listener(request: Request):
         if not messages:
             return {"status": "no_messages"}
 
-        message = messages[0]
-        from_number = message["from"]
+        msg = messages[0]
+        user = msg["from"]
 
-        # Texto tradicional
-        if message["type"] == "text":
-            text = message["text"]["body"].lower()
+        # ==== MENSAJE DE TEXTO ====
+        if msg["type"] == "text":
+            text = msg["text"]["body"].lower()
 
             if text == "menu":
                 buttons = [
                     {"id": "catalogo", "title": "Ver catálogo"},
-                    {"id": "ofertas", "title": "Ofertas"},
+                    {"id": "promo", "title": "Promos"},
                 ]
-                send_button_message(from_number, "¿Qué deseas hacer?", buttons)
-                return {"status": "button_sent"}
+                send_button_message(user, "¿Qué deseas hacer?", buttons)
+                return {"sent": "buttons"}
 
-            else:
-                send_text_message(from_number, "Escribe *menu* para comenzar")
-                return {"status": "text_sent"}
+            # Cualquier otro texto
+            send_text_message(user, "Envia *menu* para comenzar")
+            return {"sent": "text"}
 
-        # Botones
-        if message["type"] == "interactive":
-            id = message["interactive"]["button_reply"]["id"]
+        # ==== RESPUESTA A BOTONES ====
+        if msg["type"] == "interactive" and "button_reply" in msg["interactive"]:
+            button_id = msg["interactive"]["button_reply"]["id"]
 
-            if id == "catalogo":
+            if button_id == "catalogo":
                 sections = [
                     {
-                        "title": "Catálogo",
+                        "title": "Categorías",
                         "rows": [
-                            {"id": "1", "title": "Hamburguesas"},
-                            {"id": "2", "title": "Pizzas"},
-                            {"id": "3", "title": "Bebidas"},
+                            {"id": "hamb", "title": "Hamburguesas"},
+                            {"id": "pizza", "title": "Pizzas"},
+                            {"id": "bebidas", "title": "Bebidas"},
                         ]
                     }
                 ]
 
-                send_list_message(
-                    from_number,
-                    "Catálogo",
-                    "Selecciona una categoría:",
-                    sections
-                )
-                return {"status": "list_sent"}
+                send_list_message(user, "Catálogo", "Selecciona una categoría:", sections)
+                return {"sent": "list"}
 
-            if id == "ofertas":
-                send_text_message(from_number, "Hoy no hay ofertas 😢")
-                return {"status": "ofertas_sent"}
+            if button_id == "promo":
+                send_text_message(user, "Hoy no hay promociones 😢")
+                return {"sent": "promo"}
 
     except Exception as e:
-        print("ERROR WEBHOOK:", e)
-        return {"status": "error", "detail": str(e)}
+        print("ERROR:", e)
+        return {"error": str(e)}
 
     return {"status": "ok"}
-        
 
-# ---------- INICIO SERVER LOCAL ----------
+
+# ========= EJECUCIÓN LOCAL =========
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 3000)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
