@@ -1,77 +1,30 @@
-# models/data_models.py
-
-from pydantic import BaseModel
+# structures/data_models.py
+from dataclasses import dataclass
 from typing import List, Optional
+from datetime import datetime
 
-
-# ---------------------------------------------------------
-# ✔ Producto del catálogo
-# ---------------------------------------------------------
-class Product(BaseModel):
+@dataclass
+class Product:
     id: int
     name: str
+    category: str
     price: float
-    description: Optional[str] = None
-    stock: int = 0
-    image: Optional[str] = None  # URL de imagen si usas en el frontend
 
-
-# ---------------------------------------------------------
-# ✔ Item dentro del carrito
-# ---------------------------------------------------------
-class CartItem(BaseModel):
+@dataclass
+class CartItem:
     product_id: int
-    quantity: int
+    qty: int
+    details: str
 
-
-# ---------------------------------------------------------
-# ✔ Carrito completo del usuario
-# ---------------------------------------------------------
-class Cart(BaseModel):
-    items: List[CartItem] = []
-
-    def total(self, products_dict):
-        """
-        Calcula el total utilizando un diccionario:
-        {id_producto: objeto_producto}
-        """
-        total_amount = 0
-        for item in self.items:
-            if item.product_id in products_dict:
-                total_amount += products_dict[item.product_id].price * item.quantity
-        return total_amount
-
-
-# ---------------------------------------------------------
-# ✔ Información de usuario (para pedidos y WhatsApp)
-# ---------------------------------------------------------
-class UserInfo(BaseModel):
-    name: str
-    phone: str  # número formateado para WhatsApp
-    address: Optional[str] = None  # solo si elige delivery
-    email: Optional[str] = None
-
-
-# ---------------------------------------------------------
-# ✔ Tipos de entrega
-# ---------------------------------------------------------
-class DeliveryMethod(BaseModel):
-    """
-    1 → Delivery a domicilio (requiere dirección)
-    2 → Retiro en local
-    """
-    type: int  # 1 = delivery, 2 = pickup
-    address: Optional[str] = None
-
-
-# ---------------------------------------------------------
-# ✔ Pedido / Orden final
-# ---------------------------------------------------------
-class Order(BaseModel):
+@dataclass
+class Order:
     id: int
-    user: UserInfo
-    cart: Cart
-    delivery: DeliveryMethod
+    phone: str
+    items: List[CartItem]
     total: float
-    status: str = "PENDING"  # PENDING / CONFIRMED / CANCELLED
-
+    created_at: datetime
+    status: str
+    code: str
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    distance_km: Optional[float] = None

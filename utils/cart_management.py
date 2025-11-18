@@ -1,68 +1,20 @@
-# utils/cart_management.py
+CART = {}
 
-# Diccionario global donde guardamos los carritos por usuario
-carts = {}
+def add_to_cart(user, product, qty, note):
+    if user not in CART:
+        CART[user] = []
 
-
-def get_cart(user_id):
-    """Devuelve el carrito del usuario, lo crea si no existe."""
-    if user_id not in carts:
-        carts[user_id] = []
-    return carts[user_id]
-
-
-def add_to_cart(user_id, item_name):
-    """Agrega un producto al carrito del usuario."""
-
-    cart = get_cart(user_id)
-
-    cart.append({
-        "item": item_name,
-        "quantity": 1
+    CART[user].append({
+        "product": product,
+        "qty": qty,
+        "note": note,
+        "subtotal": product["price"] * qty
     })
 
-    return f"🛒 *{item_name}* fue agregado a tu carrito."
+def get_cart(user):
+    return CART.get(user, [])
 
-
-def view_cart(user_id):
-    """Devuelve el contenido del carrito formateado."""
-
-    cart = get_cart(user_id)
-
-    if not cart:
-        return "📭 *Tu carrito está vacío.*"
-
-    msg = "🛒 *Tu carrito actual:*\n\n"
-    for item in cart:
-        msg += f"- {item['item']} (x{item['quantity']})\n"
-
-    return msg
-
-
-def confirm_purchase(user_id):
-    """Confirma la compra y limpia el carrito."""
-
-    cart = get_cart(user_id)
-
-    if not cart:
-        return "📭 No tenés productos en el carrito."
-
-    total_items = len(cart)
-
-    # Vaciar carrito
-    carts[user_id] = []
-
-    return f"🎉 *Compra confirmada*\nSe procesaron *{total_items}* productos. ¡Gracias por tu compra!"
-
-
-def cancel_purchase(user_id):
-    """Cancela la compra y vacía el carrito."""
-
-    cart = get_cart(user_id)
-
-    if not cart:
-        return "📭 No tenés ninguna compra en curso."
-
-    carts[user_id] = []
-
-    return "❌ *Compra cancelada.* Tu carrito fue vaciado."
+def remove_item(user, product_id):
+    if user not in CART:
+        return
+    CART[user] = [p for p in CART[user] if p["product"]["id"] != product_id]
