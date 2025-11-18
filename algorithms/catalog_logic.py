@@ -1,195 +1,275 @@
-# algorithms/catalog_logic.py
+import json
+import os
 
-from whatsapp_service import send_whatsapp_list, send_whatsapp_text, send_whatsapp_buttons
+from whatsapp_service import (
+    send_whatsapp_list,
+    send_whatsapp_buttons,
+    send_whatsapp_text
+)
+
+# IMPORTS CORREGIDOS
 from algorithms.users_and_cart import UserManager
-from utils.cart_management import CartManager
+from utils.cart_management import CartManager  # ← EL CARRITO CORRECTO
 
-# Instancias globales
+# instancias globales
 USERS = UserManager()
 CART = CartManager()
 
-# ============================================================
-# UTILIDAD: BUSCAR PRODUCTO POR ID
-# ============================================================
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+CATALOG_PATH = os.path.join(BASE_DIR, "data", "catalog.json")
 
-def find_product(prod_id: str):
-    """
-    Simula un catálogo. Debes reemplazarlo con tu DB real.
-    """
-    PRODUCTS = [
-        {"id": "1", "nombre": "Coca-Cola 1L", "precio": 1500},
-        {"id": "2", "nombre": "Sprite 1L", "precio": 1400},
-        {"id": "3", "nombre": "Fanta 1L", "precio": 1450},
-    ]
+PAGE_SIZE = 5
+
+# ================ CARGAR CATALOGO =================
+
+with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+    PRODUCTS = json.load(f)
+
+
+def find_product(pid):
     for p in PRODUCTS:
-        if p["id"] == prod_id:
+        if str(p["id"]) == str(pid):
             return p
     return None
 
-# ============================================================
-# MENÚ PRINCIPAL DE PRODUCTOS
-# ============================================================
+
+# ================ UTILIDADES =================
+
+def get_categories():
+    cats = sorted({p.get("categoria", "Otros") for p in PRODUCTS})
+    return ["Todos"] + cats
+
+
+def filter_products(category):
+    if category == "Todos":
+        return PRODUCTS
+    return [p for p in PRODUCTS if p.get("categoria") == category]
+
+
+def sort_products(products, sort_state):
+    if sort_state == "asc":
+        return sorted(products, key=lambda p: p["precio"])
+    if sort_state == "desc":
+        return sorted(products, key=lambda p: p["precio"], reverse=True)
+    return products
+
+
+# ================ SECCIONES DEL MENÚ =================
+
+def make_menu_sections(products_page, user):
+    rows = []
+
+    for p in products_page:
+        rows.append({
+            "id": f"prod_{p['id']}",
+            "title": p["nombre"],
+            "description": f"${p['precio']} — {p.get('categoria','')}"
+        })
+
+    controls = []
+
+    controls.append({
+        "id": "ctl_filter",
+        "title": "🔎 Filtrar",
+        "description": "Seleccionar categoría"
+    })
+
+    sort_label = "Ordenar (precio)"
+    if user.sort == "asc":
+        sort_label += " ↑"
+    elif user.sort == "desc":
+        sort_label += " ↓"
+
+    controls.append({
+        "id": "ctl_sort",
+        "title": sort_label,
+        "description": "Ascendente / Descendente"
+    })
+
+    # Paginación
+    page = user.page
+
+    if (page + 1) * PAGE_SIZE < len(user._filtered):
+        controls.append({
+            "id": f"ctl_next_{page+1}",
+            "title": "➡ Siguientes",
+            "description": ""
+        })
+
+    if page > 0:
+        controls.append({
+            "id": f"ctl_prev_{page-1}",
+            "title": "⬅ Anterior",
+            "description": ""
+        })
+
+    return [
+        {"title": f"Productos — Página {page+1}", "rows": rows},
+        {"title": "Controles", "rows": controls}
+    ]
+
+
+# ================ ENVÍO DEL CATÁLOGO =================
 
 def send_product_menu(number: str):
     user = USERS.get(number)
 
-    # Simulación catálogo
-    PRODUCTS = [
-        {"id": "1", "nombre": "Coca-Cola 1L", "precio": 1500},
-        {"id": "2", "nombre": "Sprite 1L", "precio": 1400},
-        {"id": "3", "nombre": "Fanta 1L", "precio": 1450},
-    ]
+    filtered = filter_products(user.category)
+    sorted_products = sort_products(filtered, user.sort)
 
-    sections = [{
-        "title": "Bebidas",
-        "rows": [
-            {"id": f"prod_{p['id']}", "title": p["nombre"], "description": f"${p['precio']}"}
-            for p in PRODUCTS
-        ]
-    }]
+    user._filtered = sorted_products
 
-    send_whatsapp_list(
+    start = user.page * PAGE_SIZE
+    page_items = sorted_products[start:start + PAGE_SIZE]
+
+    sections = make_menu_sections(page_items, user)
+
+    return send_whatsapp_list(
         number,
-        header="Catálogo",
-        body="Selecciona un producto:",
+        header="Menú del Restaurante",
+        body=f"Página {user.page+1} — Categoría {user.category}",
         sections=sections
     )
 
-# ============================================================
-# BOTÓN → ELEGIR CANTIDAD
-# ============================================================
 
-def request_quantity(number: str, prod_id: str):
-    p = find_product(prod_id)
-    if not p:
-        send_whatsapp_text(number, "❌ Producto no encontrado.")
-        return
+# ================ MENÚ DE FILTRO =================
 
-    send_whatsapp_buttons(
+def send_filter_menu(number: str):
+    cats = get_categories()
+
+    rows = [{"id": f"cat_{c}", "title": c, "description": ""} for c in cats]
+
+    return send_whatsapp_list(
         number,
-        header=p["nombre"],
-        body="¿Cuántos deseas?",
-        buttons=[
-            {"id": f"qty_{prod_id}_1", "title": "1"},
-            {"id": f"qty_{prod_id}_2", "title": "2"},
-            {"id": f"qty_{prod_id}_3", "title": "3"},
-        ]
+        header="Filtrar productos",
+        body="Selecciona una categoría",
+        sections=[{"title": "Categorías", "rows": rows}]
     )
 
-# ============================================================
-# PEDIR NOTA DEL PRODUCTO
-# ============================================================
+
+# ================ PEDIR CANTIDAD =================
+
+def request_quantity(number: str, prod_id: str):
+    user = USERS.get(number)
+
+    product = find_product(prod_id)
+    if not product:
+        return send_whatsapp_text(number, "❌ Producto no encontrado.")
+
+    USERS.set_pending_product(number, prod_id)
+    USERS.set_state(number, "adding_qty")
+
+    buttons = [
+        {"id": f"qty_{prod_id}_1", "title": "1"},
+        {"id": f"qty_{prod_id}_2", "title": "2"},
+        {"id": f"qty_{prod_id}_3", "title": "3"},
+    ]
+
+    return send_whatsapp_buttons(
+        number,
+        header=product["nombre"],
+        body="Selecciona una cantidad:",
+        buttons=buttons
+    )
+
+
+# ================ PEDIR NOTA =================
 
 def ask_for_note(number: str):
-    send_whatsapp_text(
+    USERS.set_state(number, "adding_note")
+
+    return send_whatsapp_text(
         number,
-        "¿Quieres agregar una nota al producto?\n\n"
-        "Ej: *sin hielo*, *bien frío*\n\n"
+        "¿Quieres agregar una nota? (ej: “sin tomate”)\n"
         "Si no deseas nota, escribe: *no*"
     )
 
-# ============================================================
-# GUARDAR PRODUCTO EN EL CARRITO
-# ============================================================
 
-def save_cart_line(number: str, note: str):
+# ================ GUARDAR LÍNEA DE CARRITO =================
+
+def save_cart_line(number: str, note: str = ""):
     user = USERS.get(number)
 
-    if not user.pending_product_id or not user.pending_qty:
-        send_whatsapp_text(number, "❌ Error interno: faltan datos.")
-        return
+    prod = find_product(user.pending_product_id)
+    if not prod:
+        return send_whatsapp_text(number, "❌ Error: producto no encontrado.")
 
-    product = find_product(user.pending_product_id)
-    if not product:
-        send_whatsapp_text(number, "❌ El producto ya no existe.")
-        return
+    CART.add(user, prod, user.pending_qty, note)
 
-    CART.add(user, product, user.pending_qty, note)
-
-    # reset
+    # reset state
     user.pending_product_id = None
     user.pending_qty = None
+    USERS.set_state(number, "browsing")
 
-    send_whatsapp_buttons(
-        number,
-        header="Producto agregado 🛒",
-        body="¿Qué deseas hacer ahora?",
-        buttons=[
-            {"id": "cart_add_more", "title": "Agregar más"},
-            {"id": "btn_carrito", "title": "Ver carrito"},
-        ]
-    )
+    return send_cart(number)
+
 
 # ============================================================
-# VER CARRITO
+#                     MOSTRAR CARRITO
 # ============================================================
 
 def send_cart(number: str):
     user = USERS.get(number)
-    msg = CART.format(user)
 
-    send_whatsapp_buttons(
+    text = CART.format(user)
+
+    buttons = [
+        {"id": "cart_finish", "title": "✅ Finalizar pedido"},
+        {"id": "cart_add_more", "title": "➕ Agregar otro producto"},
+        {"id": "cart_edit", "title": "🛠 Editar carrito"},
+    ]
+
+    return send_whatsapp_buttons(
         number,
-        header="TU CARRITO",
-        body=msg,
-        buttons=[
-            {"id": "cart_add_more", "title": "Agregar más"},
-            {"id": "cart_edit", "title": "Editar"},
-            {"id": "cart_clear", "title": "Vaciar"},
-            {"id": "cart_finish", "title": "Finalizar"},
-        ]
+        header="Tu Carrito",
+        body=text,
+        buttons=buttons
     )
 
+
 # ============================================================
-# MENÚ PARA ELEGIR ITEM A EDITAR
+#                 MENÚ PARA EDITAR CARRITO
 # ============================================================
 
 def send_edit_menu(number: str):
     user = USERS.get(number)
 
     if not user.cart:
-        send_whatsapp_text(number, "Tu carrito está vacío.")
-        return
+        return send_whatsapp_text(number, "🛒 Tu carrito está vacío.")
 
-    sections = [{
-        "title": "Selecciona un producto",
-        "rows": [
-            {
-                "id": f"edit_{idx}",
-                "title": item["product"]["nombre"],
-                "description": f"Cantidad: {item['qty']}"
-            }
-            for idx, item in enumerate(user.cart)
-        ]
-    }]
+    rows = []
+    for idx, item in enumerate(user.cart):
+        rows.append({
+            "id": f"edit_{idx}",
+            "title": item["product"]["nombre"],
+            "description": f"Cantidad: {item['qty']}"
+        })
 
-    send_whatsapp_list(
+    return send_whatsapp_list(
         number,
         header="Editar carrito",
-        body="Elige el producto que deseas editar:",
-        sections=sections
+        body="Selecciona un producto:",
+        sections=[{"title": "Productos en tu carrito", "rows": rows}]
     )
 
+
 # ============================================================
-# ACCIONES PARA UN ITEM DEL CARRITO
+#           ACCIONES SOBRE UN PRODUCTO (EDITAR/BORRAR)
 # ============================================================
 
 def send_edit_actions(number: str, index: int):
     user = USERS.get(number)
-
-    if index < 0 or index >= len(user.cart):
-        send_whatsapp_text(number, "Ítem no válido.")
-        return
-
     item = user.cart[index]
-    product = item["product"]
+    prod = item["product"]
 
-    send_whatsapp_buttons(
+    buttons = [
+        {"id": f"edit_qty_{index}", "title": "Cambiar cantidad"},
+        {"id": f"edit_rm_{index}", "title": "❌ Quitar"},
+    ]
+
+    return send_whatsapp_buttons(
         number,
-        header=f"Editar: {product['nombre']}",
-        body=f"Cantidad actual: {item['qty']}",
-        buttons=[
-            {"id": f"edit_qty_{index}", "title": "Cambiar cantidad"},
-            {"id": f"edit_rm_{index}", "title": "Eliminar"},
-        ]
+        header=prod["nombre"],
+        body="¿Qué acción deseas realizar?",
+        buttons=buttons
     )
