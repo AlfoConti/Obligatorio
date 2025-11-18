@@ -4,7 +4,9 @@ import os
 WHATSAPP_API_URL = "https://graph.facebook.com/v20.0/{}/messages".format(
     os.getenv("WHATSAPP_PHONE_ID")
 )
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+
+# CORRECCIÓN IMPORTANTE: usar el nombre correcto
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 
 def _post(payload):
@@ -29,7 +31,7 @@ def send_whatsapp_text(number, message):
 
 
 # ==========================================
-# ENVIAR MENÚ LIST (LIST MESSAGE)
+# ENVIAR LIST MESSAGE
 # ==========================================
 def send_whatsapp_list(number, header, body, sections):
     payload = {
@@ -50,7 +52,7 @@ def send_whatsapp_list(number, header, body, sections):
 
 
 # ==========================================
-# ENVIAR MENÚ CON BOTONES (BUTTON MESSAGE)
+# ENVIAR BOTONES
 # ==========================================
 def send_whatsapp_buttons(number, header, body, buttons):
     payload = {
