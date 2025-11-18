@@ -182,7 +182,6 @@ def request_quantity(number: str, prod_id: str):
 # ================ PEDIR NOTA =================
 
 def ask_for_note(number: str):
-    user = USERS.get(number)
     USERS.set_state(number, "adding_note")
 
     return send_whatsapp_text(
@@ -224,8 +223,10 @@ def send_cart(number: str):
     text = CART.format(user)
 
     buttons = [
+        {"id": "cart_add_more", "title": "➕ Agregar otro artículo"},
         {"id": "cart_edit", "title": "🛠 Editar carrito"},
         {"id": "cart_clear", "title": "🗑 Vaciar carrito"},
+        {"id": "cart_finish", "title": "✔ Finalizar pedido"},
     ]
 
     return send_whatsapp_buttons(
