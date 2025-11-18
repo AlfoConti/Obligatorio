@@ -1,19 +1,12 @@
 import time
 from typing import Dict, List, Optional
 
-# ============================================================
-#                    MODELO DE USUARIO
-# ============================================================
-
 class User:
     def __init__(self, number: str):
         self.number = number
         self.created_at = time.time()
 
-        # Datos
         self.name = None
-
-        # Estado conversacional
         self.state = "idle"
 
         # Catálogo
@@ -28,11 +21,6 @@ class User:
 
         # Carrito
         self.cart: List[dict] = []
-
-
-# ============================================================
-#                       USER MANAGER
-# ============================================================
 
 class UserManager:
     def __init__(self):
