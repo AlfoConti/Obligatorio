@@ -4,10 +4,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from algorithms.catalog_logic import send_product_menu, send_filter_menu, request_quantity
 
-# CORRECCIÓN IMPORTANTE
+# alias para mantener compatibilidad con tu código
 from utils.send_message import send_whatsapp_message as send_text_message
 
-from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text
+# funciones interactivas (buttons / list) en whatsapp_service.py
+from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text, send_whatsapp_list
+
 import uvicorn
 
 app = FastAPI()
@@ -100,14 +102,25 @@ async def whatsapp_webhook(request: Request):
                 session["category"] = "Todos"
                 session["sort"] = None
 
-                # AQUÍ SE ENVÍAN LOS BOTONES DEL MENÚ PRINCIPAL
-                send_whatsapp_buttons(user)
+                # ENVÍO DE BOTONES (usar la firma: number, header, body, buttons)
+                send_whatsapp_buttons(
+                    user,
+                    header="Menú principal",
+                    body="Selecciona una opción:",
+                    buttons=[
+                        {"id": "menu_products", "title": "📦 Ver Productos"},
+                        {"id": "menu_cart", "title": "🛒 Ver Carrito"},
+                        {"id": "menu_help", "title": "❓ Ayuda"},
+                    ],
+                )
 
                 return JSONResponse({"status": "buttons_sent"})
 
+            # Si no es trigger de menú, sugerimos usar 'menu'
             send_text_message(user, "Escribe *menu* para ver las opciones.")
             return JSONResponse({"status": "text_handled"})
 
+        # Tipo no soportado
         send_text_message(user, "Tipo de mensaje no soportado. Usa *menu*.")
         return JSONResponse({"status": "unsupported"})
 
@@ -175,13 +188,27 @@ async def handle_button_reply(user, btn_id):
     if btn_id.startswith("qty_"):
         _, prod_id, qty = btn_id.split("_")
         qty = int(qty)
-
         session["cart"].append({"product_id": prod_id, "qty": qty})
-
         lines = [f"{item['product_id']} x{item['qty']}" for item in session["cart"]]
         send_text_message(user, "🛒 *Carrito actual:*\n" + "\n".join(lines))
-
         return JSONResponse({"status": "added"})
+
+    # menu buttons
+    if btn_id == "menu_products":
+        send_product_menu(user, session)
+        return JSONResponse({"status": "open_products"})
+
+    if btn_id == "menu_cart":
+        if not session["cart"]:
+            send_text_message(user, "Tu carrito está vacío.")
+        else:
+            lines = [f"{x['product_id']} x{x['qty']}" for x in session["cart"]]
+            send_text_message(user, "🛒 *Carrito actual:*\n" + "\n".join(lines))
+        return JSONResponse({"status": "cart_open"})
+
+    if btn_id == "menu_help":
+        send_text_message(user, "Usa *menu* para empezar.")
+        return JSONResponse({"status": "help"})
 
     send_text_message(user, "Botón no reconocido.")
     return JSONResponse({"status": "unknown_button"})
