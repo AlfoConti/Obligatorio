@@ -16,7 +16,7 @@ class User:
         self.name = None
 
         # Estado conversacional
-        self.state = "idle"  
+        self.state = "idle"
         # idle, browsing, adding_qty, adding_note, checkout_address, waiting_location
 
         # Catálogo (paginación / filtros)
@@ -71,28 +71,48 @@ class CartManager:
     def __init__(self):
         pass
 
+    # helper: lectura segura de nombre / precio con fallback
+    def _get_product_name(self, product: dict) -> str:
+        return product.get("name") or product.get("nombre") or f"Producto-{product.get('id', '')}"
+
+    def _get_product_price(self, product: dict) -> float:
+        # intenta varias claves y convierte a float
+        for k in ("price", "precio", "cost"):
+            if k in product:
+                try:
+                    return float(product[k])
+                except Exception:
+                    try:
+                        # si estaba en string con coma
+                        return float(str(product[k]).replace(",", "."))
+                    except Exception:
+                        return 0.0
+        return 0.0
+
     def add(self, user: User, product: dict, qty: int, note: str = "") -> dict:
+        name = self._get_product_name(product)
+        price = self._get_product_price(product)
         line = {
-            "id": product["id"],
-            "name": product["name"],
-            "price": product["price"],
-            "qty": qty,
+            "id": product.get("id"),
+            "name": name,
+            "price": price,
+            "qty": int(qty),
             "note": note,
-            "subtotal": product["price"] * qty
+            "subtotal": round(price * int(qty), 2)
         }
         user.cart.append(line)
         return line
 
     def remove(self, user: User, product_id: str) -> bool:
         before = len(user.cart)
-        user.cart = [item for item in user.cart if item["id"] != product_id]
+        user.cart = [item for item in user.cart if str(item.get("id")) != str(product_id)]
         return len(user.cart) < before
 
     def clear(self, user: User):
         user.cart = []
 
     def total(self, user: User) -> float:
-        return sum(item["subtotal"] for item in user.cart)
+        return round(sum(item.get("subtotal", 0) for item in user.cart), 2)
 
     def get(self, user: User):
         return user.cart
@@ -105,12 +125,12 @@ class CartManager:
         msg = "🛒 *Tu carrito:*\n\n"
         for item in cart:
             msg += (
-                f"*{item['name']}*\n"
-                f"Cantidad: {item['qty']} – Precio: ${item['price']}\n"
-                f"Subtotal: ${item['subtotal']}\n"
+                f"*{item.get('name')}*\n"
+                f"Cantidad: {item.get('qty')} – Precio: ${item.get('price')}\n"
+                f"Subtotal: ${item.get('subtotal')}\n"
             )
-            if item["note"]:
-                msg += f"_Nota:_ {item['note']}\n"
+            if item.get("note"):
+                msg += f"_Nota:_ {item.get('note')}\n"
             msg += "----\n"
 
         msg += f"\n💰 *Total: ${self.total(user)}*"
