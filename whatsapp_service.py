@@ -1,11 +1,7 @@
 import requests
 import os
 
-WHATSAPP_API_URL = "https://graph.facebook.com/v20.0/{}/messages".format(
-    os.getenv("WHATSAPP_PHONE_ID")
-)
-
-# CORRECCIÓN IMPORTANTE: usar el nombre correcto
+WHATSAPP_API_URL = f"https://graph.facebook.com/v20.0/{os.getenv('WHATSAPP_PHONE_ID')}/messages"
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 
@@ -18,14 +14,16 @@ def _post(payload):
 
 
 # ==========================================
-# ENVIAR TEXTO NORMAL
+# ENVIAR TEXTO
 # ==========================================
 def send_whatsapp_text(number, message):
     payload = {
         "messaging_product": "whatsapp",
         "to": number,
         "type": "text",
-        "text": {"body": message}
+        "text": {
+            "body": message
+        }
     }
     return _post(payload)
 
@@ -43,8 +41,8 @@ def send_whatsapp_list(number, header, body, sections):
             "header": {"type": "text", "text": header},
             "body": {"text": body},
             "action": {
-                "sections": sections,
-                "button": "Seleccionar"
+                "button": "Seleccionar",
+                "sections": sections
             }
         }
     }
@@ -52,22 +50,42 @@ def send_whatsapp_list(number, header, body, sections):
 
 
 # ==========================================
-# ENVIAR BOTONES
+# ✅ ENVIAR BOTONES — VERSIÓN CORRECTA
 # ==========================================
 def send_whatsapp_buttons(number, header, body, buttons):
+    """
+    buttons debe ser una lista así:
+    [
+        {"id": "btn_catalogo", "title": "Ver catálogo"},
+        {"id": "btn_carrito", "title": "Ver carrito"}
+    ]
+    """
     payload = {
         "messaging_product": "whatsapp",
         "to": number,
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "header": {"type": "text", "text": header},
-            "body": {"text": body},
+            "header": {
+                "type": "text",
+                "text": header
+            },
+            "body": {
+                "text": body
+            },
             "action": {
                 "buttons": [
-                    {"type": "reply", "reply": btn} for btn in buttons
+                    {
+                        "type": "reply",
+                        "reply": {
+                            "id": btn["id"],
+                            "title": btn["title"]
+                        }
+                    }
+                    for btn in buttons
                 ]
             }
         }
     }
+
     return _post(payload)
