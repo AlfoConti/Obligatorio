@@ -65,14 +65,14 @@ async def whatsapp_webhook(request: Request):
         if msg.get("type") == "interactive":
             inter = msg["interactive"]
 
-            # LIST
+            # LIST MESSAGE
             if inter["type"] == "list_reply":
                 row_id = inter["list_reply"]["id"]
                 handle_list_reply(user_number, row_id)
                 return JSONResponse({"status": "ok"})
 
-            # BUTTON
-            if inter["type"] == "button_reply":
+            # BUTTON MESSAGE (API actual)
+            if inter["type"] == "button":
                 btn_id = inter["button_reply"]["id"]
                 handle_button_reply(user_number, btn_id)
                 return JSONResponse({"status": "ok"})
@@ -220,7 +220,10 @@ def handle_button_reply(user_number: str, btn_id: str):
 
     # Carrito → Finalizar
     if btn_id == "cart_finish":
-        send_whatsapp_text(user_number, "🛍 Tu pedido fue recibido. En breve nos comunicamos contigo.")
+        send_whatsapp_text(
+            user_number,
+            "🛍 Tu pedido fue recibido.\nEn breve nos comunicamos contigo."
+        )
         return
 
     # Carrito → Editar
@@ -228,7 +231,7 @@ def handle_button_reply(user_number: str, btn_id: str):
         send_edit_menu(user_number)
         return
 
-    # Carrito → Vaciar (si lo agregas)
+    # Carrito → Vaciar (opcional)
     if btn_id == "cart_clear":
         CART.clear(user)
         send_whatsapp_text(user_number, "🗑 Tu carrito ha sido vaciado.")
