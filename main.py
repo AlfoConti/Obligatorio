@@ -1,27 +1,20 @@
-from flask import Flask, request
+from fastapi import FastAPI, Request
 from algorithms.catalog_logic import send_product_menu, send_filter_menu
 from utils.send_message import send_text_message
-import json
+import uvicorn
 
-app = Flask(__name__)
+app = FastAPI()
 
-SESSIONS = {} 
-"""
-SESSIONS[number] = {
-    "page": 0,
-    "category": "Todos",
-    "order": "none"
-}
-"""
+SESSIONS = {}
 
 @app.post("/webhook")
-def webhook():
-    data = request.json
+async def webhook(request: Request):
+    data = await request.json()
 
     try:
         message = data["entry"][0]["changes"][0]["value"]["messages"][0]
     except:
-        return "ok", 200
+        return {"status": "ignored"}
 
     number = message["from"]
 
@@ -29,80 +22,65 @@ def webhook():
         SESSIONS[number] = {"page": 0, "category": "Todos", "order": "none"}
         send_text_message(number, "¡Hola! Bienvenido al restaurante 🍔")
         send_product_menu(number)
-        return "ok"
+        return {"status": "ok"}
 
     msg_type = message.get("type")
 
-    # -----------------------------------------
-    # BOTÓN o LISTA (interactive)
-    # -----------------------------------------
     if msg_type == "interactive":
         inter = message["interactive"]
 
-        # BUTTON
         if inter["type"] == "button_reply":
             button_id = inter["button_reply"]["id"]
-            # Aquí puedes agregar más botones
-            return "ok"
+            return {"status": "ok"}
 
-        # LIST
         elif inter["type"] == "list_reply":
             selection = inter["list_reply"]["id"]
 
             # Filtrar
             if selection == "filter-menu":
                 send_filter_menu(number)
-                return "ok"
+                return {"status": "ok"}
 
-            # Ordenamiento
+            # Ordenar
             if selection == "order-price":
-                # toggle
                 if SESSIONS[number]["order"] == "asc":
                     SESSIONS[number]["order"] = "desc"
                 else:
                     SESSIONS[number]["order"] = "asc"
-                send_product_menu(
-                    number,
-                    SESSIONS[number]["page"],
-                    SESSIONS[number]["category"],
-                    SESSIONS[number]["order"]
-                )
-                return "ok"
+                send_product_menu(number)
+                return {"status": "ok"}
 
             # Categorías
             if selection.startswith("cat-"):
-                cat = selection.replace("cat-", "")
-                SESSIONS[number]["category"] = cat
+                SESSIONS[number]["category"] = selection.replace("cat-", "")
                 SESSIONS[number]["page"] = 0
-                send_product_menu(number, 0, cat)
-                return "ok"
+                send_product_menu(number)
+                return {"status": "ok"}
 
             # Navegación
             if selection.startswith("next-"):
-                page = int(selection.replace("next-", ""))
-                SESSIONS[number]["page"] = page
-                send_product_menu(number, page, SESSIONS[number]["category"], SESSIONS[number]["order"])
-                return "ok"
+                SESSIONS[number]["page"] += 1
+                send_product_menu(number)
+                return {"status": "ok"}
 
             if selection.startswith("back-"):
-                page = int(selection.replace("back-", ""))
-                SESSIONS[number]["page"] = page
-                send_product_menu(number, page, SESSIONS[number]["category"], SESSIONS[number]["order"])
-                return "ok"
+                SESSIONS[number]["page"] -= 1
+                send_product_menu(number)
+                return {"status": "ok"}
 
             if selection == "back-home":
-                SESSIONS[number]["page"] = 0
-                send_product_menu(number, 0)
-                return "ok"
+                SESSIONS[number] = {"page": 0, "category": "Todos", "order": "none"}
+                send_product_menu(number)
+                return {"status": "ok"}
 
-            # Producto seleccionado
+            # Producto elegido
             if selection.startswith("product-"):
-                prod_id = int(selection.replace("product-", ""))
-                send_text_message(number, f"Elegiste el producto {prod_id}. Enviaré lógica de cantidad luego.")
-                return "ok"
+                prod_id = selection.replace("product-", "")
+                send_text_message(number, f"Elegiste el producto {prod_id}")
+                return {"status": "ok"}
 
-    return "ok"
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
-    app.run(port=3000)
+    uvicorn.run("main:app", host="0.0.0.0", port=3000)
