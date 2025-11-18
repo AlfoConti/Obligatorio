@@ -61,12 +61,14 @@ async def whatsapp_webhook(request: Request):
         # ----------------------------
         if msg.get("type") == "interactive":
             inter = msg["interactive"]
-            
+
+            # LISTAS
             if inter["type"] == "list_reply":
                 row_id = inter["list_reply"]["id"]
                 await handle_list_reply(user_number, row_id)
                 return JSONResponse({"status": "ok"})
 
+            # BOTONES
             if inter["type"] == "button_reply":
                 btn_id = inter["button_reply"]["id"]
                 await handle_button_reply(user_number, btn_id)
@@ -77,23 +79,22 @@ async def whatsapp_webhook(request: Request):
         # ----------------------------
         if msg.get("type") == "text":
             text = msg["text"]["body"].strip()
+            txt = text.lower()
 
             # ESTADO: agregar nota
             if user.state == "adding_note":
-                note_text = "" if text.lower() == "no" else text
-
-                # guardar línea
+                note_text = "" if txt == "no" else text
                 save_cart_line(user_number, note_text)
 
-                # limpiar estado SIEMPRE
+                # limpiar estado
                 user.state = "browsing"
                 user.pending_qty = None
                 user.pending_product_id = None
 
+                send_whatsapp_text(user_number, "✔️ Producto agregado al carrito.")
                 return JSONResponse({"status": "ok"})
 
-            # comandos generales
-            txt = text.lower()
+            # comandos globales
             if txt in ["hola", "menu", "inicio", "start", "catalogo"]:
                 USERS.reset_catalog_flow(user_number)
                 send_whatsapp_buttons(
@@ -121,12 +122,13 @@ async def whatsapp_webhook(request: Request):
         return JSONResponse({"status": "ok"})
 
 
-# --------------------------
+# ==========================================================
 # LIST HANDLER
-# --------------------------
+# ==========================================================
 async def handle_list_reply(user_number: str, row_id: str):
     user = get_user_obj(user_number)
 
+    # selecciona producto
     if row_id.startswith("prod_"):
         prod_id = row_id.replace("prod_", "")
         USERS.set_pending_product(user_number, prod_id)
@@ -134,10 +136,12 @@ async def handle_list_reply(user_number: str, row_id: str):
         request_quantity(user_number, prod_id)
         return
 
+    # abrir filtros
     if row_id == "ctl_filter":
         send_filter_menu(user_number)
         return
 
+    # ordenar asc/desc/reset
     if row_id == "ctl_sort":
         user.sort = (
             "asc" if user.sort is None else
@@ -148,6 +152,7 @@ async def handle_list_reply(user_number: str, row_id: str):
         send_product_menu(user_number)
         return
 
+    # paginación
     if row_id.startswith("ctl_next_"):
         user.page = int(row_id.replace("ctl_next_", ""))
         send_product_menu(user_number)
@@ -158,6 +163,7 @@ async def handle_list_reply(user_number: str, row_id: str):
         send_product_menu(user_number)
         return
 
+    # categorías
     if row_id.startswith("cat_"):
         user.category = row_id.replace("cat_", "")
         user.page = 0
@@ -167,25 +173,29 @@ async def handle_list_reply(user_number: str, row_id: str):
     send_whatsapp_text(user_number, "Opción no reconocida.")
 
 
-# --------------------------
+# ==========================================================
 # BUTTON HANDLER
-# --------------------------
+# ==========================================================
 async def handle_button_reply(user_number: str, btn_id: str):
     user = get_user_obj(user_number)
 
+    # abrir catálogo
     if btn_id == "btn_catalogo":
         USERS.reset_catalog_flow(user_number)
         send_product_menu(user_number)
         return
 
+    # ver carrito
     if btn_id == "btn_carrito":
         send_whatsapp_text(user_number, CART.format(user))
         return
 
+    # info
     if btn_id == "btn_info":
         send_whatsapp_text(user_number, "ℹ️ Somos una tienda online. ¿Qué necesitas?")
         return
 
+    # cantidad seleccionada
     if btn_id.startswith("qty_"):
         _, prod_id, qty_s = btn_id.split("_")
         qty = int(qty_s)
