@@ -1,69 +1,71 @@
+import os
 import requests
 import json
-import os
 
-TOKEN = os.getenv("WHATSAPP_TOKEN")
-API_URL = os.getenv("WHATSAPP_URL")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
+API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
 
-def send_text_message(number, text):
-    data = {
+# Construimos automáticamente la URL
+WHATSAPP_API_URL = f"https://graph.facebook.com/{API_VERSION}/{PHONE_ID}/messages"
+
+
+def send_message(payload: dict):
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    print("Sending to:", WHATSAPP_API_URL)
+    print("Payload:", payload)
+
+    response = requests.post(WHATSAPP_API_URL, headers=headers, data=json.dumps(payload))
+    print("Response:", response.text)
+    return response
+
+
+def send_text_message(to: str, text: str):
+    payload = {
         "messaging_product": "whatsapp",
-        "to": number,
+        "to": to,
         "type": "text",
         "text": {"body": text}
     }
-    return _send(data)
+    return send_message(payload)
 
-def send_button_message(number, text, buttons):
-    """
-    buttons = [
-        {"id": "buy", "title": "Comprar"},
-        {"id": "menu", "title": "Ver menú"},
-    ]
-    """
-    data = {
+
+def send_button_message(to: str, body: str, buttons: list):
+    payload = {
         "messaging_product": "whatsapp",
-        "to": number,
+        "to": to,
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {"text": text},
+            "body": {"text": body},
             "action": {"buttons": [
-                {"type": "reply", "reply": b} for b in buttons
+                {
+                    "type": "reply",
+                    "reply": {"id": b["id"], "title": b["title"]}
+                } for b in buttons
             ]}
         }
     }
-    return _send(data)
+    return send_message(payload)
 
-def send_list_message(number, header, body, sections):
-    """
-    sections=[
-        {
-            "title": "Página 1",
-            "rows": [
-                {"id": "P1-1", "title": "Hamburguesa"},
-                {"id": "P1-2", "title": "Pizza"},
-            ]
-        }
-    ]
-    """
-    data = {
+
+def send_list_message(to: str, header: str, body: str, sections: list):
+    payload = {
         "messaging_product": "whatsapp",
-        "to": number,
+        "to": to,
         "type": "interactive",
         "interactive": {
             "type": "list",
             "header": {"type": "text", "text": header},
             "body": {"text": body},
-            "action": {"sections": sections}
+            "action": {
+                "sections": sections,
+                "button": "Ver opciones"
+            }
         }
     }
-    return _send(data)
-
-def _send(data):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {TOKEN}",
-    }
-    response = requests.post(API_URL, headers=headers, data=json.dumps(data))
-    return response.json()
+    return send_message(payload)
