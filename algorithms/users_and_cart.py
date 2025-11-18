@@ -18,16 +18,8 @@ class User:
 
         # Estado conversacional
         self.state = "idle"
-        # states:
-        # - idle
-        # - browsing
-        # - adding_qty
-        # - adding_note
-        # - editing
-        # - checkout_address
-        # - waiting_location
 
-        # Catálogo: filtros / orden / paginado
+        # Catálogo
         self.category = "Todos"
         self.sort = None
         self.page = 0
@@ -38,12 +30,6 @@ class User:
         self.pending_qty: Optional[int] = None
 
         # Carrito
-        # Cada item es:
-        # {
-        #    "product": dict,
-        #    "qty": int,
-        #    "note": str
-        # }
         self.cart: List[dict] = []
 
 
@@ -56,7 +42,6 @@ class UserManager:
         self.users: Dict[str, User] = {}
 
     def get(self, number: str) -> User:
-        """Obtiene un usuario, o lo crea si es nuevo."""
         if number not in self.users:
             self.users[number] = User(number)
         return self.users[number]
@@ -89,7 +74,7 @@ class CartManager:
         pass
 
     # -------------------------------
-    # Helpers para obtener nombre/price
+    # Helpers
     # -------------------------------
 
     def _get_product_name(self, product: dict) -> str:
@@ -100,7 +85,6 @@ class CartManager:
         )
 
     def _get_product_price(self, product: dict) -> float:
-        # intenta varias claves
         for k in ("precio", "price", "cost"):
             if k in product:
                 try:
@@ -117,7 +101,6 @@ class CartManager:
     # -------------------------------
 
     def add(self, user: User, product: dict, qty: int, note: str = "") -> dict:
-        """Agrega producto al carrito."""
         name = self._get_product_name(product)
         price = self._get_product_price(product)
 
@@ -130,6 +113,39 @@ class CartManager:
 
         user.cart.append(line)
         return line
+
+    # -------------------------------
+    # UPDATE SUBTOTALS
+    # -------------------------------
+
+    def update_subtotals(self, user: User):
+        """Recalcula subtotales y total después de editar cantidades."""
+        for item in user.cart:
+            price = self._get_product_price(item["product"])
+            item["subtotal"] = round(price * item["qty"], 2)
+
+    # -------------------------------
+    # Incrementar cantidad
+    # -------------------------------
+
+    def increment(self, user: User, index: int) -> bool:
+        if 0 <= index < len(user.cart):
+            user.cart[index]["qty"] += 1
+            self.update_subtotals(user)
+            return True
+        return False
+
+    # -------------------------------
+    # Restar cantidad
+    # -------------------------------
+
+    def decrement(self, user: User, index: int) -> bool:
+        if 0 <= index < len(user.cart):
+            if user.cart[index]["qty"] > 1:
+                user.cart[index]["qty"] -= 1
+                self.update_subtotals(user)
+                return True
+        return False
 
     # -------------------------------
     # Remove por índice
@@ -156,14 +172,14 @@ class CartManager:
         return round(sum(item.get("subtotal", 0) for item in user.cart), 2)
 
     # -------------------------------
-    # Get raw
+    # Get
     # -------------------------------
 
     def get(self, user: User):
         return user.cart
 
     # -------------------------------
-    # Format carrito
+    # Format
     # -------------------------------
 
     def format(self, user: User) -> str:
