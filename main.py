@@ -1,79 +1,99 @@
+import os
 from fastapi import FastAPI, Request
-from utils.send_message import (
-    send_text_message,
-    send_button_message,
-    send_list_message
-)
+from utils.send_message import send_text_message, send_button_message, send_list_message
 
 app = FastAPI()
 
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")  # Para el webhook de Meta
+
+
 @app.get("/")
-def root():
-    return {"status": "running"}
+async def home():
+    return {"status": "ok", "message": "Bot WhatsApp funcionando"}
 
-@app.post("/whatsapp")
-async def whatsapp_webhook(request: Request):
 
-    body = await request.json()
+# ---------- WEBHOOK VERIFICACIÓN META ----------
+@app.get("/webhook")
+async def verify(request: Request):
+    params = request.query_params
+    mode = params.get("hub.mode")
+    challenge = params.get("hub.challenge")
+    token = params.get("hub.verify_token")
 
-    # Seguridad: si no viene mensaje, ignoramos
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return int(challenge)
+    return {"error": "Token inválido"}
+
+
+# ---------- RECEPCIÓN DE MENSAJES ----------
+@app.post("/webhook")
+async def webhook_listener(request: Request):
+    data = await request.json()
+
     try:
-        entry = body["entry"][0]["changes"][0]["value"]
-        message = entry["messages"][0]
-        number = message["from"]
-    except:
-        return {"status": "ignored"}
+        entry = data["entry"][0]
+        changes = entry["changes"][0]
+        value = changes["value"]
 
-    # Caso: Botón o texto
-    text = ""
-    if message.get("text"):
-        text = message["text"]["body"].strip().lower()
+        messages = value.get("messages", [])
+        if not messages:
+            return {"status": "no_messages"}
 
-    if message.get("interactive"):
-        interactive = message["interactive"]
-        if "button_reply" in interactive:
-            text = interactive["button_reply"]["id"]
-        elif "list_reply" in interactive:
-            text = interactive["list_reply"]["id"]
+        message = messages[0]
+        from_number = message["from"]
 
-    # 🟦 PRIMER MENSAJE
-    if text == "hola" or text == "menu" or text == "":
-        send_button_message(
-            number,
-            "¡Hola! ¿Qué deseas hacer?",
-            buttons=[
-                {"id": "ver_menu", "title": "📜 Ver Menú"},
-                {"id": "hacer_pedido", "title": "🛒 Hacer Pedido"}
-            ]
-        )
-        return {"status": "sent"}
+        # Texto tradicional
+        if message["type"] == "text":
+            text = message["text"]["body"].lower()
 
-    # 🟧 SI ELIGE "VER MENÚ"
-    if text == "ver_menu":
-        send_list_message(
-            number,
-            header="Menú del día",
-            body="Selecciona una categoría:",
-            sections=[
-                {
-                    "title": "Comidas",
-                    "rows": [
-                        {"id": "menu_hamburguesas", "title": "🍔 Hamburguesas"},
-                        {"id": "menu_pizzas", "title": "🍕 Pizzas"},
-                    ]
-                }
-            ]
-        )
-        return {"status": "sent"}
+            if text == "menu":
+                buttons = [
+                    {"id": "catalogo", "title": "Ver catálogo"},
+                    {"id": "ofertas", "title": "Ofertas"},
+                ]
+                send_button_message(from_number, "¿Qué deseas hacer?", buttons)
+                return {"status": "button_sent"}
 
-    # 🟩 SUBMENÚ: Hamburguesas
-    if text == "menu_hamburguesas":
-        send_text_message(number, "🍔 Menú Hamburguesas:\n- Clásica\n- Doble\n- BBQ")
-        return {"status": "sent"}
+            else:
+                send_text_message(from_number, "Escribe *menu* para comenzar")
+                return {"status": "text_sent"}
 
-    # 🟥 SUBMENÚ: Pizzas
-    if text == "menu_pizzas":
-        send_text_message(number, "🍕 Menú Pizzas:\n- Muzza\n- Pepperoni\n- 4 Quesos")
-        return {"status": "sent"}
+        # Botones
+        if message["type"] == "interactive":
+            id = message["interactive"]["button_reply"]["id"]
 
-    return {"status": "unknown"}
+            if id == "catalogo":
+                sections = [
+                    {
+                        "title": "Catálogo",
+                        "rows": [
+                            {"id": "1", "title": "Hamburguesas"},
+                            {"id": "2", "title": "Pizzas"},
+                            {"id": "3", "title": "Bebidas"},
+                        ]
+                    }
+                ]
+
+                send_list_message(
+                    from_number,
+                    "Catálogo",
+                    "Selecciona una categoría:",
+                    sections
+                )
+                return {"status": "list_sent"}
+
+            if id == "ofertas":
+                send_text_message(from_number, "Hoy no hay ofertas 😢")
+                return {"status": "ofertas_sent"}
+
+    except Exception as e:
+        print("ERROR WEBHOOK:", e)
+        return {"status": "error", "detail": str(e)}
+
+    return {"status": "ok"}
+        
+
+# ---------- INICIO SERVER LOCAL ----------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 3000)))
