@@ -65,16 +65,16 @@ async def whatsapp_webhook(request: Request):
         if msg.get("type") == "interactive":
             inter = msg["interactive"]
 
-            # LIST REPLY
+            # LIST
             if inter["type"] == "list_reply":
                 row_id = inter["list_reply"]["id"]
-                await handle_list_reply(user_number, row_id)
+                handle_list_reply(user_number, row_id)
                 return JSONResponse({"status": "ok"})
 
-            # BUTTON REPLY
+            # BUTTON
             if inter["type"] == "button_reply":
                 btn_id = inter["button_reply"]["id"]
-                await handle_button_reply(user_number, btn_id)
+                handle_button_reply(user_number, btn_id)
                 return JSONResponse({"status": "ok"})
 
         # ================================
@@ -112,11 +112,9 @@ async def whatsapp_webhook(request: Request):
                 )
                 return JSONResponse({"status": "ok"})
 
-            # fallback
             send_whatsapp_text(user_number, "No entendí 🤖. Escribe *menu* para comenzar.")
             return JSONResponse({"status": "ok"})
 
-        # unsupported
         send_whatsapp_text(user_number, "Escribe *menu* para comenzar.")
         return JSONResponse({"status": "ok"})
 
@@ -128,10 +126,10 @@ async def whatsapp_webhook(request: Request):
 # ==========================================================
 # LIST HANDLER
 # ==========================================================
-async def handle_list_reply(user_number: str, row_id: str):
+def handle_list_reply(user_number: str, row_id: str):
     user = get_user_obj(user_number)
 
-    # Product selected
+    # Producto seleccionado
     if row_id.startswith("prod_"):
         prod_id = row_id.replace("prod_", "")
         USERS.set_pending_product(user_number, prod_id)
@@ -139,12 +137,12 @@ async def handle_list_reply(user_number: str, row_id: str):
         request_quantity(user_number, prod_id)
         return
 
-    # Filter menu
+    # Filtro
     if row_id == "ctl_filter":
         send_filter_menu(user_number)
         return
 
-    # Sort asc/desc/reset
+    # Orden
     if row_id == "ctl_sort":
         user.sort = (
             "asc" if user.sort is None else
@@ -155,25 +153,26 @@ async def handle_list_reply(user_number: str, row_id: str):
         send_product_menu(user_number)
         return
 
-    # Pagination
+    # Paginación siguiente
     if row_id.startswith("ctl_next_"):
         user.page = int(row_id.replace("ctl_next_", ""))
         send_product_menu(user_number)
         return
 
+    # Paginación anterior
     if row_id.startswith("ctl_prev_"):
         user.page = int(row_id.replace("ctl_prev_", ""))
         send_product_menu(user_number)
         return
 
-    # Category selected
+    # Categoría
     if row_id.startswith("cat_"):
         user.category = row_id.replace("cat_", "")
         user.page = 0
         send_product_menu(user_number)
         return
 
-    # Carrito → Editar producto específico
+    # Editar carrito → elegir item
     if row_id.startswith("edit_"):
         index = int(row_id.replace("edit_", ""))
         send_edit_actions(user_number, index)
@@ -185,21 +184,21 @@ async def handle_list_reply(user_number: str, row_id: str):
 # ==========================================================
 # BUTTON HANDLER
 # ==========================================================
-async def handle_button_reply(user_number: str, btn_id: str):
+def handle_button_reply(user_number: str, btn_id: str):
     user = get_user_obj(user_number)
 
-    # Menú principal → Ver catálogo
+    # Ver catálogo
     if btn_id == "btn_catalogo":
         USERS.reset_catalog_flow(user_number)
         send_product_menu(user_number)
         return
 
-    # Menú principal → Ver carrito
+    # Ver carrito
     if btn_id == "btn_carrito":
         send_cart(user_number)
         return
 
-    # Menú principal → Información
+    # Información
     if btn_id == "btn_info":
         send_whatsapp_text(user_number, "ℹ️ Somos una tienda online. ¿Qué necesitas?")
         return
@@ -213,31 +212,29 @@ async def handle_button_reply(user_number: str, btn_id: str):
         ask_for_note(user_number)
         return
 
-    # ---------------------------
-    # 🚀 Nuevo: botones del carrito
-    # ---------------------------
-
+    # Carrito → Agregar más
     if btn_id == "cart_add_more":
         USERS.reset_catalog_flow(user_number)
         send_product_menu(user_number)
         return
 
+    # Carrito → Finalizar
     if btn_id == "cart_finish":
         send_whatsapp_text(user_number, "🛍 Tu pedido fue recibido. En breve nos comunicamos contigo.")
         return
 
+    # Carrito → Editar
     if btn_id == "cart_edit":
         send_edit_menu(user_number)
         return
 
+    # Carrito → Vaciar (si lo agregas)
     if btn_id == "cart_clear":
         CART.clear(user)
         send_whatsapp_text(user_number, "🗑 Tu carrito ha sido vaciado.")
         return
 
-    # ---------------------------
-    # Editar cantidad
-    # ---------------------------
+    # Editar → Cambiar cantidad
     if btn_id.startswith("edit_qty_"):
         idx = int(btn_id.replace("edit_qty_", ""))
         item = user.cart[idx]
@@ -245,10 +242,10 @@ async def handle_button_reply(user_number: str, btn_id: str):
         request_quantity(user_number, prod["id"])
         return
 
-    # Eliminar un item
+    # Editar → Eliminar
     if btn_id.startswith("edit_rm_"):
         idx = int(btn_id.replace("edit_rm_", ""))
-        CART.remove_index(user, idx)
+        CART.remove(user, idx)
         send_cart(user_number)
         return
 
