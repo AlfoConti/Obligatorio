@@ -11,11 +11,14 @@ from algorithms.catalog_logic import (
     ask_for_note,
     save_cart_line,
     find_product,
+    send_edit_menu,
+    send_edit_actions,
+    send_cart,
     USERS,
     CART
 )
 
-from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text
+from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text, send_whatsapp_list
 
 app = FastAPI()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
@@ -170,6 +173,17 @@ async def handle_list_reply(user_number: str, row_id: str):
         send_product_menu(user_number)
         return
 
+    # editar item en carrito (viene de send_edit_menu list)
+    if row_id.startswith("edit_"):
+        try:
+            idx = int(row_id.replace("edit_", ""))
+        except Exception:
+            send_whatsapp_text(user_number, "Índice inválido.")
+            return
+        # mostrar acciones para ese item
+        send_edit_actions(user_number, idx)
+        return
+
     send_whatsapp_text(user_number, "Opción no reconocida.")
 
 
@@ -185,9 +199,10 @@ async def handle_button_reply(user_number: str, btn_id: str):
         send_product_menu(user_number)
         return
 
-    # ver carrito
+    # ver carrito (muestra botones dentro de send_cart)
     if btn_id == "btn_carrito":
-        send_whatsapp_text(user_number, CART.format(user))
+        # use send_cart which returns buttons cart_edit/cart_clear
+        send_cart(user_number)
         return
 
     # info
@@ -195,16 +210,117 @@ async def handle_button_reply(user_number: str, btn_id: str):
         send_whatsapp_text(user_number, "ℹ️ Somos una tienda online. ¿Qué necesitas?")
         return
 
-    # cantidad seleccionada
+    # cantidad seleccionada (nuevo producto)
     if btn_id.startswith("qty_"):
-        _, prod_id, qty_s = btn_id.split("_")
-        qty = int(qty_s)
+        try:
+            _, prod_id, qty_s = btn_id.split("_")
+            qty = int(qty_s)
+        except Exception:
+            send_whatsapp_text(user_number, "Formato de cantidad inválido.")
+            return
 
         user.pending_qty = qty
         USERS.set_state(user_number, "adding_note")
         ask_for_note(user_number)
         return
 
+    # === BOTONES DEL CARRITO ===
+    if btn_id == "cart_edit":
+        # abrir menú de edición (lista de items)
+        send_edit_menu(user_number)
+        return
+
+    if btn_id == "cart_clear":
+        # vaciar carrito
+        CART.clear(user)
+        send_whatsapp_text(user_number, "🗑 Tu carrito fue vaciado.")
+        # opcional: mostrar carrito vacío
+        send_cart(user_number)
+        return
+
+    # botones generados por send_edit_actions:
+    # - edit_qty_{index}
+    # - edit_rm_{index}
+    # - edit_setqty_{index}_{n}  (cuando usuario elige nueva cantidad)
+    if btn_id.startswith("edit_qty_"):
+        # pedir nueva cantidad para el índice (mostramos botones 1..5)
+        try:
+            idx = int(btn_id.replace("edit_qty_", ""))
+        except Exception:
+            send_whatsapp_text(user_number, "Índice inválido.")
+            return
+
+        # validate index
+        if not (0 <= idx < len(user.cart)):
+            send_whatsapp_text(user_number, "Índice fuera de rango.")
+            return
+
+        # preparar botones para nueva cantidad (1..5)
+        buttons = [
+            {"id": f"edit_setqty_{idx}_1", "title": "1"},
+            {"id": f"edit_setqty_{idx}_2", "title": "2"},
+            {"id": f"edit_setqty_{idx}_3", "title": "3"},
+            {"id": f"edit_setqty_{idx}_4", "title": "4"},
+            {"id": f"edit_setqty_{idx}_5", "title": "5"},
+        ]
+        prod = user.cart[idx]["product"]
+        return send_whatsapp_buttons(
+            user_number,
+            header=prod.get("nombre", prod.get("name", "Producto")),
+            body="Selecciona la nueva cantidad:",
+            buttons=buttons
+        )
+
+    if btn_id.startswith("edit_rm_"):
+        # quitar item del carrito por índice
+        try:
+            idx = int(btn_id.replace("edit_rm_", ""))
+        except Exception:
+            send_whatsapp_text(user_number, "Índice inválido.")
+            return
+
+        if CART.remove(user, idx):
+            send_whatsapp_text(user_number, "❌ Item eliminado del carrito.")
+        else:
+            send_whatsapp_text(user_number, "No se pudo eliminar (índice inválido).")
+
+        # mostrar carrito actualizado
+        send_cart(user_number)
+        return
+
+    if btn_id.startswith("edit_setqty_"):
+        # aplicar nueva cantidad
+        # formato: edit_setqty_{idx}_{n}
+        try:
+            parts = btn_id.split("_")
+            idx = int(parts[2])
+            new_qty = int(parts[3])
+        except Exception:
+            send_whatsapp_text(user_number, "Formato inválido para actualizar cantidad.")
+            return
+
+        if not (0 <= idx < len(user.cart)):
+            send_whatsapp_text(user_number, "Índice fuera de rango.")
+            return
+
+        # obtener precio y recalcular subtotal
+        item = user.cart[idx]
+        prod = item["product"]
+        # use CartManager helpers to compute price if present
+        try:
+            price = CART._get_product_price(prod)
+        except Exception:
+            # fallback: intentar claves directas
+            price = float(prod.get("precio", prod.get("price", 0)) or 0)
+
+        item["qty"] = int(new_qty)
+        item["subtotal"] = round(price * int(new_qty), 2)
+
+        send_whatsapp_text(user_number, "✅ Cantidad actualizada.")
+        send_cart(user_number)
+        return
+
+    # fallback
     send_whatsapp_text(user_number, "Botón no reconocido.")
 
 
