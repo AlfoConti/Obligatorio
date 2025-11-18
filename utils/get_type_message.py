@@ -1,24 +1,18 @@
-# utils/get_type_message.py
 def get_message_type(message):
-    """
-    Recibe el objeto 'message' del webhook de Meta y devuelve:
-    - ("text", "contenido")
-    - ("location", (lat, lon))
-    - ("unknown", None)
-    """
-    if not isinstance(message, dict):
-        return ("unknown", None)
+    """Detecta el tipo de mensaje entrante."""
+    if "text" in message:
+        return "text", message["text"]["body"]
 
-    # texto
-    if "text" in message and "body" in message["text"]:
-        return ("text", message["text"]["body"])
+    if "button" in message:
+        return "button", message["button"]["payload"]
 
-    # location (estructura: message["location"] = {"latitude":..,"longitude":..})
-    if "location" in message:
-        loc = message["location"]
-        lat = loc.get("latitude") or loc.get("lat")
-        lon = loc.get("longitude") or loc.get("long") or loc.get("lng")
-        if lat is not None and lon is not None:
-            return ("location", (float(lat), float(lon)))
+    if "interactive" in message:
+        interactive = message["interactive"]
 
-    return ("unknown", None)
+        if "button_reply" in interactive:
+            return "button", interactive["button_reply"]["id"]
+
+        if "list_reply" in interactive:
+            return "list", interactive["list_reply"]["id"]
+
+    return "unknown", None
