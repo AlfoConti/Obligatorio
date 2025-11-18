@@ -55,15 +55,16 @@ async def verify(request: Request):
 
 
 # ----------------------------------------
-# WEBHOOK POST
+# 📌 WEBHOOK POST — COMPLETAMENTE REEMPLAZADO
 # ----------------------------------------
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
     try:
         body = await request.json()
+        print("📥 WEBHOOK RECIBIDO:", body)
 
-        entry = body.get("entry", [{}])[0]
-        changes = entry.get("changes", [{}])[0]
+        entry = body.get("entry", [])[0]
+        changes = entry.get("changes", [])[0]
         value = changes.get("value", {})
         messages = value.get("messages", [])
 
@@ -74,27 +75,9 @@ async def whatsapp_webhook(request: Request):
         user = msg.get("from")
         session = get_session(user)
 
-        # ==========================================
-        # TEXTO
-        # ==========================================
-        body_text = msg.get("text", {}).get("body", "").lower().strip()
-
-        if body_text in ["hola", "menu", "inicio", "start"]:
-            send_whatsapp_buttons(
-                user,
-                header="Menú principal",
-                body="Selecciona una opción:",
-                buttons=[
-                    {"id": "btn_catalogo", "title": "Ver catálogo"},
-                    {"id": "btn_carrito", "title": "Ver carrito"},
-                    {"id": "btn_info", "title": "Información"}
-                ]
-            )
-            return JSONResponse({"status": "menu_sent"})
-
-        # ==========================================
+        # ------------------------------------------------
         # INTERACTIVE (botones o listas)
-        # ==========================================
+        # ------------------------------------------------
         if msg.get("type") == "interactive":
             inter = msg.get("interactive", {})
             itype = inter.get("type")
@@ -107,8 +90,34 @@ async def whatsapp_webhook(request: Request):
                 btn_id = inter["button_reply"]["id"]
                 return await handle_button_reply(user, btn_id)
 
-        send_text_message(user, "No entendí. Escribe *menu* para comenzar.")
-        return JSONResponse({"status": "unknown"})
+        # ------------------------------------------------
+        # TEXTO
+        # ------------------------------------------------
+        if msg.get("type") == "text":
+            body_text = msg.get("text", {}).get("body", "").lower().strip()
+
+            if body_text in ["hola", "menu", "inicio", "start"]:
+                send_whatsapp_buttons(
+                    user,
+                    header="Menú principal",
+                    body="Selecciona una opción:",
+                    buttons=[
+                        {"id": "btn_catalogo", "title": "Ver catálogo"},
+                        {"id": "btn_carrito", "title": "Ver carrito"},
+                        {"id": "btn_info", "title": "Información"}
+                    ]
+                )
+                return JSONResponse({"status": "menu_sent"})
+
+            # Si escribe otra cosa
+            send_text_message(user, "No entendí. Escribe *menu* para comenzar.")
+            return JSONResponse({"status": "unknown_text"})
+
+        # ------------------------------------------------
+        # OTROS TIPOS NO MANEJADOS
+        # ------------------------------------------------
+        send_text_message(user, "Escribe *menu* para comenzar.")
+        return JSONResponse({"status": "unsupported_type"})
 
     except Exception as e:
         print("Webhook error:", e)
@@ -172,7 +181,9 @@ async def handle_button_reply(user, btn_id):
 
         session["cart"].append({"product_id": prod_id, "qty": qty})
 
-        cart_lines = "\n".join(f"{item['product_id']} x{item['qty']}" for item in session["cart"])
+        cart_lines = "\n".join(
+            f"{item['product_id']} x{item['qty']}" for item in session["cart"]
+        )
         send_text_message(user, f"🛒 *Carrito actualizado:*\n{cart_lines}")
 
         return JSONResponse({"status": "qty_added"})
