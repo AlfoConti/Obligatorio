@@ -1,75 +1,71 @@
 import requests
-import json
 import os
 
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
-WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
+WHATSAPP_API_URL = "https://graph.facebook.com/v20.0/{}/messages".format(
+    os.getenv("WHATSAPP_PHONE_ID")
+)
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 
-def send_whatsapp_buttons(to_number):
-    url = f"https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_ID}/messages"
 
+def _post(payload):
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }
+    return requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
 
-    data = {
+
+# ==========================================
+# ENVIAR TEXTO NORMAL
+# ==========================================
+def send_whatsapp_text(number, message):
+    payload = {
         "messaging_product": "whatsapp",
-        "to": to_number,
+        "to": number,
+        "type": "text",
+        "text": {"body": message}
+    }
+    return _post(payload)
+
+
+# ==========================================
+# ENVIAR MENÚ LIST (LIST MESSAGE)
+# ==========================================
+def send_whatsapp_list(number, header, body, sections):
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": number,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": header},
+            "body": {"text": body},
+            "action": {
+                "sections": sections,
+                "button": "Seleccionar"
+            }
+        }
+    }
+    return _post(payload)
+
+
+# ==========================================
+# ENVIAR MENÚ CON BOTONES (BUTTON MESSAGE)
+# ==========================================
+def send_whatsapp_buttons(number, header, body, buttons):
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": number,
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {
-                "text": "Bienvenido 👋\nSelecciona una opción:"
-            },
+            "header": {"type": "text", "text": header},
+            "body": {"text": body},
             "action": {
                 "buttons": [
-                    {
-                        "type": "reply",
-                        "reply": {
-                            "id": "menu_productos",
-                            "title": "📦 Ver Productos"
-                        }
-                    },
-                    {
-                        "type": "reply",
-                        "reply": {
-                            "id": "ver_carrito",
-                            "title": "🛒 Ver Carrito"
-                        }
-                    },
-                    {
-                        "type": "reply",
-                        "reply": {
-                            "id": "ayuda",
-                            "title": "❓ Ayuda"
-                        }
-                    }
+                    {"type": "reply", "reply": btn} for btn in buttons
                 ]
             }
         }
     }
-
-    response = requests.post(url, headers=headers, json=data)
-    print("BOTONES RESPUESTA:", response.text)
-    return response
-
-
-def send_whatsapp_text(number, text):
-    url = f"https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_ID}/messages"
-    
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "messaging_product": "whatsapp",
-        "to": number,
-        "type": "text",
-        "text": { "body": text }
-    }
-
-    response = requests.post(url, headers=headers, json=data)
-    print("TEXTO RESPUESTA:", response.text)
-    return response
+    return _post(payload)
