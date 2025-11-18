@@ -1,5 +1,3 @@
-# algorithms/catalog_logic.py
-
 import json
 import os
 
@@ -9,7 +7,9 @@ from whatsapp_service import (
     send_whatsapp_text
 )
 
-from algorithms.users_and_cart import UserManager, CartManager
+# IMPORTS CORREGIDOS
+from algorithms.users_and_cart import UserManager
+from utils.cart_management import CartManager  # ← EL CARRITO CORRECTO
 
 # instancias globales
 USERS = UserManager()
@@ -137,19 +137,13 @@ def send_product_menu(number: str):
 def send_filter_menu(number: str):
     cats = get_categories()
 
-    rows = [{
-        "id": f"cat_{c}",
-        "title": c,
-        "description": ""
-    } for c in cats]
-
-    sections = [{"title": "Categorías", "rows": rows}]
+    rows = [{"id": f"cat_{c}", "title": c, "description": ""} for c in cats]
 
     return send_whatsapp_list(
         number,
         header="Filtrar productos",
         body="Selecciona una categoría",
-        sections=sections
+        sections=[{"title": "Categorías", "rows": rows}]
     )
 
 
@@ -182,7 +176,6 @@ def request_quantity(number: str, prod_id: str):
 # ================ PEDIR NOTA =================
 
 def ask_for_note(number: str):
-    user = USERS.get(number)
     USERS.set_state(number, "adding_note")
 
     return send_whatsapp_text(
@@ -203,7 +196,7 @@ def save_cart_line(number: str, note: str = ""):
 
     CART.add(user, prod, user.pending_qty, note)
 
-    # reset
+    # reset state
     user.pending_product_id = None
     user.pending_qty = None
     USERS.set_state(number, "browsing")
@@ -216,9 +209,6 @@ def save_cart_line(number: str, note: str = ""):
 # ============================================================
 
 def send_cart(number: str):
-    """
-    Muestra el carrito con botones correctos (3 botones máximo permitido por WhatsApp).
-    """
     user = USERS.get(number)
 
     text = CART.format(user)
@@ -248,12 +238,10 @@ def send_edit_menu(number: str):
         return send_whatsapp_text(number, "🛒 Tu carrito está vacío.")
 
     rows = []
-
     for idx, item in enumerate(user.cart):
-        prod = item["product"]
         rows.append({
             "id": f"edit_{idx}",
-            "title": prod["nombre"],
+            "title": item["product"]["nombre"],
             "description": f"Cantidad: {item['qty']}"
         })
 
@@ -261,10 +249,7 @@ def send_edit_menu(number: str):
         number,
         header="Editar carrito",
         body="Selecciona un producto:",
-        sections=[{
-            "title": "Productos en tu carrito",
-            "rows": rows
-        }]
+        sections=[{"title": "Productos en tu carrito", "rows": rows}]
     )
 
 
