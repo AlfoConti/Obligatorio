@@ -1,57 +1,194 @@
-from fastapi import FastAPI, Request
+# main.py
 import os
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse, JSONResponse
+from algorithms.catalog_logic import send_product_menu, send_filter_menu, request_quantity
+from utils.send_message import send_text_message
+import uvicorn
 
-from utils.send_message import send_whatsapp_message
-from utils.get_type_message import get_message_type
+# IMPORTANTE: este archivo lo creaste antes
+# Aquí están los botones del menú inicial
+from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text  
 
 app = FastAPI()
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
 
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+# Simple in-memory sessions
+SESSIONS = {}
+
+def get_session(user):
+    s = SESSIONS.get(user)
+    if not s:
+        s = {
+            "page": 0,
+            "category": "Todos",
+            "sort": None,
+            "cart": [],
+            "_filtered_products_cache": None,
+            "pending_product": None,
+        }
+        SESSIONS[user] = s
+    return s
 
 
-# ========= WEBHOOK VERIFICATION ==========
-@app.get("/webhook")
-async def verify_token(request: Request):
-    mode = request.query_params.get("hub.mode")
-    token = request.query_params.get("hub.verify_token")
-    challenge = request.query_params.get("hub.challenge")
+# Root
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Bot activo"}
+
+
+# Meta Webhook Verification
+@app.get("/whatsapp")
+async def verify(request: Request):
+    params = request.query_params
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("Webhook verificado correctamente.")
-        return int(challenge)
+        return PlainTextResponse(challenge)
 
-    return {"error": "TOKEN_INVALIDO"}
+    return PlainTextResponse("Verification failed", status_code=403)
 
 
-# ========= RECEIVING WHATSAPP MESSAGES ==========
-@app.post("/webhook")
-async def receive_message(request: Request):
+# Webhook Listener
+@app.post("/whatsapp")
+async def whatsapp_webhook(request: Request):
     body = await request.json()
-    print("WEBHOOK BODY:", body)
 
     try:
-        entry = body["entry"][0]["changes"][0]["value"]
+        entry = body.get("entry", [])[0]
+        changes = entry.get("changes", [])[0]
+        value = changes.get("value", {})
+        messages = value.get("messages", [])
 
-        if "messages" in entry:
-            message = entry["messages"][0]
-            from_number = message["from"]
+        if not messages:
+            return JSONResponse({"status": "no_messages"})
 
-            msg_type, content = get_message_type(message)
-            print(f"Mensaje recibido → Tipo: {msg_type} | Contenido: {content}")
+        msg = messages[0]
+        user = msg.get("from")
+        session = get_session(user)
 
-            if msg_type == "text":
-                send_whatsapp_message(from_number, f"Recibí tu mensaje: {content}")
+        # ----------------------------------------
+        # INTERACTIVE BUTTONS / LIST RESPONSES
+        # ----------------------------------------
+        if msg.get("type") == "interactive":
+            inter = msg.get("interactive", {})
+            itype = inter.get("type")
 
-            elif msg_type == "button":
-                send_whatsapp_message(from_number, f"Has presionado: {content}")
+            # LIST REPLY (product list, filter, pages)
+            if itype == "list_reply":
+                lr = inter.get("list_reply", {})
+                row_id = lr.get("id")
+                return await handle_list_reply(user, row_id)
 
-            elif msg_type == "list":
-                send_whatsapp_message(from_number, f"Elegiste la opción: {content}")
+            # BUTTON REPLY (quantities, menu actions)
+            elif itype == "button_reply":
+                br = inter.get("button_reply", {})
+                btn_id = br.get("id")
+                return await handle_button_reply(user, btn_id)
 
-            else:
-                send_whatsapp_message(from_number, "No entendí tu mensaje.")
+        # ----------------------------------------
+        # TEXT MESSAGES
+        # ----------------------------------------
+        if msg.get("type") == "text":
+            body_text = msg.get("text", {}).get("body", "").strip().lower()
+
+            # PALABRAS QUE ABREN EL MENÚ PRINCIPAL
+            if body_text in ["menu", "hola", "inicio", "start"]:
+                session["page"] = 0
+                session["category"] = "Todos"
+                session["sort"] = None
+
+                # AQUÍ SE ENVÍAN LOS BOTONES DEL MENÚ PRINCIPAL
+                send_whatsapp_buttons(user)
+
+                return JSONResponse({"status": "buttons_sent"})
+
+            send_text_message(user, "Escribe *menu* para ver las opciones.")
+            return JSONResponse({"status": "text_handled"})
+
+        send_text_message(user, "Tipo de mensaje no soportado. Usa *menu*.")
+        return JSONResponse({"status": "unsupported"})
 
     except Exception as e:
-        print("ERROR PROCESANDO WHATSAPP:", e)
+        print("Webhook error:", e)
+        return JSONResponse({"status": "error", "detail": str(e)})
 
-    return {"status": "ok"}
+
+# =====================================================
+# LIST REPLY HANDLER (for list selections)
+# =====================================================
+async def handle_list_reply(user, row_id):
+    session = get_session(user)
+
+    if row_id.startswith("prod_"):
+        prod_id = row_id.replace("prod_", "")
+        session["pending_product"] = prod_id
+        request_quantity(user, prod_id)
+        return JSONResponse({"status": "asked_qty"})
+
+    if row_id == "ctl_filter":
+        send_filter_menu(user)
+        return JSONResponse({"status": "filter"})
+
+    if row_id == "ctl_sort":
+        if session["sort"] is None:
+            session["sort"] = "asc"
+        elif session["sort"] == "asc":
+            session["sort"] = "desc"
+        else:
+            session["sort"] = None
+
+        session["page"] = 0
+        send_product_menu(user, session)
+        return JSONResponse({"status": "sorted"})
+
+    if row_id.startswith("ctl_next_"):
+        session["page"] = int(row_id.replace("ctl_next_", ""))
+        send_product_menu(user, session)
+        return JSONResponse({"status": "next"})
+
+    if row_id.startswith("ctl_prev_"):
+        session["page"] = int(row_id.replace("ctl_prev_", ""))
+        send_product_menu(user, session)
+        return JSONResponse({"status": "prev"})
+
+    if row_id.startswith("cat_"):
+        cat = row_id.replace("cat_", "")
+        session["category"] = cat
+        session["page"] = 0
+        send_product_menu(user, session)
+        return JSONResponse({"status": "category"})
+
+    send_text_message(user, "Opción no reconocida.")
+    return JSONResponse({"status": "unknown"})
+
+
+# =====================================================
+# BUTTON REPLY HANDLER (for quantity buttons)
+# =====================================================
+async def handle_button_reply(user, btn_id):
+    session = get_session(user)
+
+    # quantity pattern: qty_PRODUCTO_3
+    if btn_id.startswith("qty_"):
+        _, prod_id, qty = btn_id.split("_")
+        qty = int(qty)
+
+        session["cart"].append({"product_id": prod_id, "qty": qty})
+
+        # SIMPLE CART SUMMARY
+        lines = [f"{item['product_id']} x{item['qty']}" for item in session["cart"]]
+        send_text_message(user, "🛒 *Carrito actual:*\n" + "\n".join(lines))
+
+        return JSONResponse({"status": "added"})
+
+    # ADD OTHER BUTTONS HERE (if needed)
+    send_text_message(user, "Botón no reconocido.")
+    return JSONResponse({"status": "unknown_button"})
+
+
+# Run locally
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
