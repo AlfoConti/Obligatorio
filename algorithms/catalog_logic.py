@@ -86,7 +86,6 @@ def make_menu_sections(products_page, user):
         "description": "Ascendente / Descendente"
     })
 
-    # Paginación
     page = user.page
 
     if (page + 1) * PAGE_SIZE < len(user._filtered):
@@ -196,7 +195,7 @@ def save_cart_line(number: str, note: str = ""):
 
     CART.add(user, prod, user.pending_qty, note)
 
-    # reset state
+    # reset estado
     user.pending_product_id = None
     user.pending_qty = None
     USERS.set_state(number, "browsing")
@@ -205,7 +204,7 @@ def save_cart_line(number: str, note: str = ""):
 
 
 # ============================================================
-#                     MOSTRAR CARRITO
+#                     MOSTRAR CARRITO (FIX 2025)
 # ============================================================
 
 def send_cart(number: str):
@@ -213,16 +212,20 @@ def send_cart(number: str):
 
     text = CART.format(user)
 
+    # PRIMERO enviamos el texto — seguro y sin límite
+    send_whatsapp_text(number, f"🛒 *Tu Carrito:*\n\n{text}")
+
+    # LUEGO mandamos los botones aparte — esto evita errores en WhatsApp
     buttons = [
         {"id": "cart_finish", "title": "✅ Finalizar pedido"},
-        {"id": "cart_add_more", "title": "➕ Agregar otro producto"},
+        {"id": "cart_add_more", "title": "➕ Agregar producto"},
         {"id": "cart_edit", "title": "🛠 Editar carrito"},
     ]
 
     return send_whatsapp_buttons(
         number,
-        header="Tu Carrito",
-        body=text,
+        header="Opciones del carrito",
+        body="Selecciona una acción:",
         buttons=buttons
     )
 
