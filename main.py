@@ -1,4 +1,4 @@
-# main.py (completo)
+# main.py
 import os
 import uvicorn
 from fastapi import FastAPI, Request
@@ -20,14 +20,16 @@ from algorithms.catalog_logic import (
 
 from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text
 
-# ---------------------------------------------------------
-# IMPORTAR DELIVERY MANAGER DE MANERA SEGURA
-# ---------------------------------------------------------
+
+# ======================================================
+# DELIVERY MANAGER (protección por si no existe)
+# ======================================================
 try:
     from algorithms.delivery_manager import DELIVERY_MANAGER
 except Exception as e:
     print("⚠️ DELIVERY_MANAGER no disponible:", e)
     DELIVERY_MANAGER = None
+
 
 app = FastAPI()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
@@ -37,20 +39,18 @@ def get_user_obj(number: str):
     return USERS.get(number)
 
 
-# -------------------------------------------------
-# Registrar deliveries de prueba (opcional)
-# -------------------------------------------------
+# Registrar deliveries de prueba
 try:
     if DELIVERY_MANAGER:
         DELIVERY_MANAGER.register_delivery(os.environ.get("DELIVERY_1_ID", "delivery_1"))
         DELIVERY_MANAGER.register_delivery(os.environ.get("DELIVERY_2_ID", "delivery_2"))
 except Exception as e:
-    print("⚠️ Error registrando deliveries de prueba:", e)
+    print("⚠️ Error registrando deliveries:", e)
 
 
-# ==========================================================
-# UNIVERSAL BUTTON ID EXTRACTOR (2025 compatible)
-# ==========================================================
+# ======================================================
+# UNIVERSAL BUTTON ID EXTRACTOR
+# ======================================================
 def get_button_id(msg):
     inter = msg.get("interactive", {})
 
@@ -68,9 +68,9 @@ def get_button_id(msg):
     return None
 
 
-# ==========================================================
+# ======================================================
 # UNIVERSAL LIST ID EXTRACTOR
-# ==========================================================
+# ======================================================
 def get_list_id(msg):
     inter = msg.get("interactive", {})
     if inter.get("type") == "list_reply":
@@ -78,9 +78,9 @@ def get_list_id(msg):
     return None
 
 
-# ==========================================================
-# ROOT
-# ==========================================================
+# ======================================================
+# ROOT & VERIFY
+# ======================================================
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Bot activo"}
@@ -94,9 +94,9 @@ async def verify(request: Request):
     return PlainTextResponse("Verification failed", status_code=403)
 
 
-# ==========================================================
+# ======================================================
 # MAIN WHATSAPP WEBHOOK
-# ==========================================================
+# ======================================================
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
     try:
@@ -143,6 +143,7 @@ async def whatsapp_webhook(request: Request):
                 send_whatsapp_text(user_number, "No pude leer la ubicación. ¿Podés intentarlo de nuevo?")
                 return JSONResponse({"status": "ok"})
 
+            # Crear orden
             try:
                 order = CART.create_order(user, lat=lat, lon=lon)
             except TypeError:
@@ -155,6 +156,7 @@ async def whatsapp_webhook(request: Request):
                 USERS.set_state(user_number, "browsing")
                 return JSONResponse({"status": "ok"})
 
+            # Delivery manager
             if DELIVERY_MANAGER is None:
                 send_whatsapp_text(user_number, "El sistema de delivery no está disponible.")
                 USERS.set_state(user_number, "browsing")
@@ -222,9 +224,9 @@ async def whatsapp_webhook(request: Request):
         return JSONResponse({"status": "ok"})
 
 
-# ==========================================================
+# ======================================================
 # HANDLER DE LISTAS
-# ==========================================================
+# ======================================================
 def handle_list_reply(user_number: str, row_id: str):
     user = get_user_obj(user_number)
 
@@ -267,9 +269,9 @@ def handle_list_reply(user_number: str, row_id: str):
     send_whatsapp_text(user_number, "Opción no reconocida.")
 
 
-# ==========================================================
+# ======================================================
 # HANDLER DE BOTONES
-# ==========================================================
+# ======================================================
 def handle_button_reply(user_number: str, btn_id: str):
     user = get_user_obj(user_number)
     btn_id = btn_id.strip().lower()
@@ -287,6 +289,7 @@ def handle_button_reply(user_number: str, btn_id: str):
         send_whatsapp_text(user_number, "ℹ️ Somos una tienda online.")
         return
 
+    # ===== Cantidad =====
     if btn_id.startswith("qty_"):
         parts = btn_id.split("_")
         if len(parts) == 3:
@@ -299,6 +302,7 @@ def handle_button_reply(user_number: str, btn_id: str):
         send_whatsapp_text(user_number, "Error leyendo la cantidad.")
         return
 
+    # ===== Carrito =====
     if btn_id == "cart_add_more":
         USERS.reset_catalog_flow(user_number)
         send_product_menu(user_number)
@@ -321,6 +325,7 @@ def handle_button_reply(user_number: str, btn_id: str):
         send_whatsapp_text(user_number, "🗑 Carrito vaciado.")
         return
 
+    # ===== Editar carrito =====
     if btn_id.startswith("edit_qty_"):
         idx = int(btn_id.replace("edit_qty_", ""))
         item = user.cart[idx]
@@ -336,8 +341,8 @@ def handle_button_reply(user_number: str, btn_id: str):
     send_whatsapp_text(user_number, "Botón no reconocido.")
 
 
-# ==========================================================
+# ======================================================
 # RUN
-# ==========================================================
+# ======================================================
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
