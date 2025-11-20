@@ -1,4 +1,4 @@
-# main.py (completo)
+# main.py
 import os
 import uvicorn
 from fastapi import FastAPI, Request
@@ -33,13 +33,16 @@ app = FastAPI()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
 
 
-def get_user_obj(number: str):
-    return USERS.get(number)
+# ---------------------------------------------------------
+#  CORREGIDO: ahora usa phone (NO number)
+# ---------------------------------------------------------
+def get_user_obj(phone: str):
+    return USERS.get(phone)
 
 
-# -------------------------------------------------
+# ---------------------------------------------------------
 # Registrar deliveries de prueba (opcional)
-# -------------------------------------------------
+# ---------------------------------------------------------
 try:
     if DELIVERY_MANAGER:
         DELIVERY_MANAGER.register_delivery(os.environ.get("DELIVERY_1_ID", "delivery_1"))
