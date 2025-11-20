@@ -117,15 +117,14 @@ class CartManager:
 
             total += qty * price
 
-        # ----------------------------- FIX CRÍTICO -----------------------------
-        # ANTES estaba "user.phone" → pero NO existe en el modelo de usuario.
-        # La propiedad correcta es user.number (ver users_and_cart.User)
-        # -----------------------------------------------------------------------
+        # -------------- FIX MÁS IMPORTANTE -------------------
+        # user.phone NO EXISTE → debe ser user.number
+        # -----------------------------------------------------
 
         order = {
             "id": order_id,
             "code": code,
-            "user": user.number,  # ✔ CORREGIDO
+            "user": user.number,     # ✔ FIX CORRECTO
             "items": items,
             "total": round(total, 2),
             "lat": lat,
