@@ -1,4 +1,3 @@
-# main.py
 import os
 import uvicorn
 from fastapi import FastAPI, Request
@@ -21,7 +20,7 @@ from algorithms.catalog_logic import (
 from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text
 
 # ---------------------------------------------------------
-# IMPORTAR DELIVERY MANAGER DE MANERA SEGURA
+# IMPORTAR DELIVERY MANAGER
 # ---------------------------------------------------------
 try:
     from algorithms.delivery_manager import DELIVERY_MANAGER
@@ -34,25 +33,25 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
 
 
 # ---------------------------------------------------------
-#  CORREGIDO: ahora usa phone (NO number)
+# USUARIO POR PHONE
 # ---------------------------------------------------------
 def get_user_obj(phone: str):
     return USERS.get(phone)
 
 
 # ---------------------------------------------------------
-# Registrar deliveries de prueba (opcional)
+# Registrar deliveries de prueba
 # ---------------------------------------------------------
 try:
     if DELIVERY_MANAGER:
         DELIVERY_MANAGER.register_delivery(os.environ.get("DELIVERY_1_ID", "delivery_1"))
         DELIVERY_MANAGER.register_delivery(os.environ.get("DELIVERY_2_ID", "delivery_2"))
 except Exception as e:
-    print("⚠️ Error registrando deliveries de prueba:", e)
+    print("⚠️ Error registrando deliveries:", e)
 
 
 # ==========================================================
-# UNIVERSAL BUTTON ID EXTRACTOR (2025 compatible)
+# UNIVERSAL BUTTON ID
 # ==========================================================
 def get_button_id(msg):
     inter = msg.get("interactive", {})
@@ -72,7 +71,7 @@ def get_button_id(msg):
 
 
 # ==========================================================
-# UNIVERSAL LIST ID EXTRACTOR
+# UNIVERSAL LIST ID
 # ==========================================================
 def get_list_id(msg):
     inter = msg.get("interactive", {})
@@ -98,13 +97,13 @@ async def verify(request: Request):
 
 
 # ==========================================================
-# MAIN WHATSAPP WEBHOOK
+# WEBHOOK PRINCIPAL
 # ==========================================================
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request):
     try:
         body = await request.json()
-        print("📥 WEBHOOK RECIBIDO:", body)
+        print("📥 WEBHOOK:", body)
 
         entry = body.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
@@ -127,15 +126,15 @@ async def whatsapp_webhook(request: Request):
         # ========= BOTÓN =========
         btn_id = get_button_id(msg)
         if btn_id:
-            print("🔘 Botón detectado:", btn_id)
             handle_button_reply(user_number, btn_id)
             return JSONResponse({"status": "ok"})
 
         # ========= UBICACIÓN =========
         if msg.get("type") == "location":
             user = get_user_obj(user_number)
-            if getattr(user, "state", None) != "awaiting_location":
-                send_whatsapp_text(user_number, "No estoy esperando una ubicación ahora mismo. Escribe *menu* para comenzar.")
+
+            if getattr(user, "state", "") != "awaiting_location":
+                send_whatsapp_text(user_number, "No estoy esperando ubicación. Escribe *menu*.")
                 return JSONResponse({"status": "ok"})
 
             loc = msg.get("location", {})
@@ -143,9 +142,10 @@ async def whatsapp_webhook(request: Request):
             lon = loc.get("longitude")
 
             if lat is None or lon is None:
-                send_whatsapp_text(user_number, "No pude leer la ubicación. ¿Podés intentarlo de nuevo?")
+                send_whatsapp_text(user_number, "No pude leer tu ubicación, enviála de nuevo.")
                 return JSONResponse({"status": "ok"})
 
+            # Crear orden
             try:
                 order = CART.create_order(user, lat=lat, lon=lon)
             except TypeError:
@@ -154,27 +154,42 @@ async def whatsapp_webhook(request: Request):
                 order["lon"] = lon
 
             if order is None:
-                send_whatsapp_text(user_number, "No hay productos en tu carrito.")
+                send_whatsapp_text(user_number, "Tu carrito está vacío.")
                 USERS.set_state(user_number, "browsing")
                 return JSONResponse({"status": "ok"})
 
             if DELIVERY_MANAGER is None:
-                send_whatsapp_text(user_number, "El sistema de delivery no está disponible.")
+                send_whatsapp_text(user_number, "Delivery no disponible.")
                 USERS.set_state(user_number, "browsing")
                 return JSONResponse({"status": "ok"})
 
+            # Encolarlo en delivery
             try:
                 enqueued_order = DELIVERY_MANAGER.enqueue_order(order)
             except Exception as e:
-                print("❌ ERROR en enqueue_order:", e)
-                send_whatsapp_text(user_number, "Hubo un error al procesar tu pedido.")
+                print("❌ ERROR enqueue_order:", e)
+                send_whatsapp_text(user_number, "Error al procesar tu pedido.")
                 USERS.set_state(user_number, "browsing")
                 return JSONResponse({"status": "ok"})
 
-            send_whatsapp_text(
-                user_number,
-                f"✅ Pedido recibido. Tu código de entrega es *{enqueued_order.get('code')}*."
+            # -----------------------------
+            # 🔥 RESPUESTA COMPLETA AL CLIENTE
+            # -----------------------------
+            dist = enqueued_order.get("distance_km")
+            eta = enqueued_order.get("eta_min")
+
+            msg_txt = (
+                f"✅ Pedido recibido.\n"
+                f"Tu código de entrega es *{enqueued_order.get('code')}*."
             )
+
+            if dist:
+                msg_txt += f"\n📏 Distancia estimada: *{dist} km*."
+            if eta:
+                msg_txt += f"\n⏱️ Tiempo estimado de entrega: *{eta} minutos*."
+
+            send_whatsapp_text(user_number, msg_txt)
+
             USERS.set_state(user_number, "browsing")
             return JSONResponse({"status": "ok"})
 
@@ -182,7 +197,7 @@ async def whatsapp_webhook(request: Request):
         if msg.get("type") == "text":
             text = msg["text"]["body"].strip().lower()
 
-            # ——— Entregas delivery ———
+            # —— Confirmación delivery —— 
             if text.startswith("entrego ") or (len(text) == 6 and text.isalnum()):
                 parts = text.split()
                 code = parts[1] if text.startswith("entrego ") else text.upper()
@@ -194,12 +209,12 @@ async def whatsapp_webhook(request: Request):
                 )
                 return JSONResponse({"status": "ok"})
 
-            # ——— Agregar nota ———
+            # —— Nota en carrito ——
             if user.state == "adding_note":
                 save_cart_line(user_number, "" if text == "no" else text)
                 return JSONResponse({"status": "ok"})
 
-            # ——— Comandos base ———
+            # —— Comandos base ——
             if text in ["hola", "menu", "inicio", "start", "catalogo"]:
                 USERS.reset_catalog_flow(user_number)
                 send_whatsapp_buttons(
@@ -214,7 +229,7 @@ async def whatsapp_webhook(request: Request):
                 )
                 return JSONResponse({"status": "ok"})
 
-            send_whatsapp_text(user_number, "No entendí 🤖. Escribe *menu* para comenzar.")
+            send_whatsapp_text(user_number, "No entendí 🤖. Escribe *menu*.")
             return JSONResponse({"status": "ok"})
 
         send_whatsapp_text(user_number, "Escribe *menu* para comenzar.")
@@ -226,7 +241,7 @@ async def whatsapp_webhook(request: Request):
 
 
 # ==========================================================
-# HANDLER DE LISTAS
+# HANDLER LISTAS
 # ==========================================================
 def handle_list_reply(user_number: str, row_id: str):
     user = get_user_obj(user_number)
@@ -271,7 +286,7 @@ def handle_list_reply(user_number: str, row_id: str):
 
 
 # ==========================================================
-# HANDLER DE BOTONES
+# HANDLER BOTONES
 # ==========================================================
 def handle_button_reply(user_number: str, btn_id: str):
     user = get_user_obj(user_number)
@@ -299,7 +314,7 @@ def handle_button_reply(user_number: str, btn_id: str):
             USERS.set_state(user_number, "adding_note")
             ask_for_note(user_number)
             return
-        send_whatsapp_text(user_number, "Error leyendo la cantidad.")
+        send_whatsapp_text(user_number, "Error leyendo cantidad.")
         return
 
     if btn_id == "cart_add_more":
@@ -309,10 +324,7 @@ def handle_button_reply(user_number: str, btn_id: str):
 
     if btn_id == "cart_finish":
         USERS.set_state(user_number, "awaiting_location")
-        send_whatsapp_text(
-            user_number,
-            "Perfecto. Enviá tu ubicación para confirmar el pedido."
-        )
+        send_whatsapp_text(user_number, "Perfecto. Enviá tu ubicación para confirmar el pedido.")
         return
 
     if btn_id == "cart_edit":

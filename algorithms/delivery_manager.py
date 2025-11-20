@@ -1,492 +1,348 @@
+# algorithms/delivery_manager.py
+import time
 import random
 import string
-import time
-from collections import deque, defaultdict
+from collections import deque
 from math import radians, sin, cos, sqrt, atan2
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 
-
-# -------------------------
-# Utilidades
-# -------------------------
-def generate_code(length=6) -> str:
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    return "".join(random.choices(alphabet, k=length))
-
-
-def haversine_km(lat1, lon1, lat2, lon2) -> float:
+# ------------------------
+# UTIL: haversine
+# ------------------------
+def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
     rlat1, rlon1, rlat2, rlon2 = map(radians, [lat1, lon1, lat2, lon2])
     dlat = rlat2 - rlat1
     dlon = rlon2 - rlon1
-    a = sin(dlat / 2) ** 2 + cos(rlat1) * cos(rlat2) * sin(dlon / 2) ** 2
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    a = sin(dlat/2)**2 + cos(rlat1)*cos(rlat2)*sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
     return R * c
 
+# ------------------------
+# CONSTANTS & CONFIG
+# ------------------------
+RESTAURANT_COORDS = (-34.905, -56.191)  # ejemplo: Montevideo (ajustar si hace falta)
+TANDA_MAX = 7
+TANDA_MAX_WAIT_SECONDS = 45 * 60  # 45 minutos
+KM_TO_MIN = 2.0  # convertir km a minutos estimados (por km)
+BASE_PREP_MIN = 10  # tiempo base de preparación (minutos)
+LITERS_PER_KM = 0.1  # 1 litro cada 10 km -> 0.1 L/km
 
-def zone_from_coords(rest_lat: float, rest_lon: float, lat: float, lon: float) -> str:
-    """
-    Divide el plano en 4 zonas respecto al restaurante:
-    NO, NE, SO, SE (Noroeste, Noreste, Suroeste, Sureste)
-    """
-    if lat is None or lon is None:
-        return "UNKNOWN"
-    dy = lat - rest_lat
-    dx = lon - rest_lon
-    if dy >= 0 and dx < 0:
-        return "NO"
-    if dy >= 0 and dx >= 0:
+# ------------------------
+# Helpers
+# ------------------------
+def generate_code(length=6):
+    return ''.join(random.choices(string.ascii_uppercase + "23456789", k=length))
+
+def zone_from_coords(lat, lon, center=RESTAURANT_COORDS):
+    lat_c, lon_c = center
+    if lat >= lat_c and lon >= lon_c:
         return "NE"
-    if dy < 0 and dx < 0:
-        return "SO"
-    return "SE"
+    if lat >= lat_c and lon < lon_c:
+        return "NO"
+    if lat < lat_c and lon >= lon_c:
+        return "SE"
+    return "SO"
 
-
-# -------------------------
-# Nodo BST (para la tanda)
-# -------------------------
+# ------------------------
+# BST helper (balanced) for delivery ordering by distance
+# We'll build a simple balanced tree structure from a sorted list
+# and expose an inorder traversal (closest -> farthest).
+# ------------------------
 class BSTNode:
-    def __init__(self, order: dict, distance: float):
+    def __init__(self, order: dict):
         self.order = order
-        self.distance = distance
-        self.left: Optional["BSTNode"] = None
-        self.right: Optional["BSTNode"] = None
+        self.left: Optional['BSTNode'] = None
+        self.right: Optional['BSTNode'] = None
 
-
-def build_bst_from_sorted(ordered: List[Tuple[dict, float]]) -> Optional[BSTNode]:
-    """
-    Construye un BST balanceado a partir de una lista ya ordenada por distancia.
-    ordered: List of tuples (order_dict, distance)
-    """
-    if not ordered:
+def build_balanced_bst(sorted_orders: List[dict]) -> Optional[BSTNode]:
+    if not sorted_orders:
         return None
-    mid = len(ordered) // 2
-    node = BSTNode(ordered[mid][0], ordered[mid][1])
-    node.left = build_bst_from_sorted(ordered[:mid])
-    node.right = build_bst_from_sorted(ordered[mid + 1 :])
-    return node
+    mid = len(sorted_orders) // 2
+    root = BSTNode(sorted_orders[mid])
+    root.left = build_balanced_bst(sorted_orders[:mid])
+    root.right = build_balanced_bst(sorted_orders[mid+1:])
+    return root
 
+def inorder_traversal(node: Optional[BSTNode], out: List[dict]):
+    if not node:
+        return
+    inorder_traversal(node.left, out)
+    out.append(node.order)
+    inorder_traversal(node.right, out)
 
-def inorder_list_from_bst(root: Optional[BSTNode]) -> List[dict]:
-    res = []
-
-    def _in(node: Optional[BSTNode]):
-        if not node:
-            return
-        _in(node.left)
-        res.append({"order": node.order, "distance": node.distance})
-        _in(node.right)
-
-    _in(root)
-    return res
-
-
-# -------------------------
+# ------------------------
 # DeliveryManager
-# -------------------------
+# ------------------------
 class DeliveryManager:
     def __init__(self):
-        # Repartidores registrados
-        self.registered_deliveries: set[str] = set()
-
-        # Estado de cada repartidor
-        # delivery_id -> {
-        #   'state': 'available'|'busy',
-        #   'assigned_tanda': tanda_id or None,
-        #   'delivered_count': int,
-        #   'distance_km': float,
-        #   'fuel_liters': float,
-        #   'last_location': (lat, lon)  # where the driver is (starts at restaurant)
-        # }
+        # registro de repartidores y su estado
+        # delivery_id -> dict(status: "available"|"busy", assigned_tanda_id: Optional[int], stats: {...})
         self.deliveries: Dict[str, Dict[str, Any]] = {}
 
-        # Colas por zona (cada zona -> deque of orders)
+        # colas por zona (pedidos sin asignar a tanda todavía)
         self.zone_queues: Dict[str, deque] = {
-            "NO": deque(),
-            "NE": deque(),
-            "SO": deque(),
-            "SE": deque(),
-            "UNKNOWN": deque(),
+            "NE": deque(), "NO": deque(), "SE": deque(), "SO": deque()
         }
 
-        # Tandas creadas (id incremental)
-        self.tanda_counter = 0
-        # tanda_id -> tanda_info
-        # tanda_info: {
-        #   'zone': str,
-        #   'orders': [order, ...],
-        #   'bst_root': BSTNode,
-        #   'inorder': [{'order':..., 'distance':...}, ...],
-        #   'current_idx': int,
-        #   'created_at': float,
-        #   'delivery_id': optional
-        # }
+        # cola de tandas esperando asignación a repartidor
+        self.pending_tandas: deque = deque()
+
+        # tandas activas: tanda_id -> dict(info)
         self.tandas: Dict[int, Dict[str, Any]] = {}
 
-        # Cola de tandas esperando asignación (FIFO)
-        self.tanda_queue: deque = deque()
+        # contador de tandas
+        self._next_tanda_id = 1
 
-        # Parámetros
-        self.max_per_tanda = 7
-        self.max_wait_seconds = 45 * 60  # 45 minutos
-
-        # Restaurante (punto de referencia)
-        self.rest_lat: Optional[float] = None
-        self.rest_lon: Optional[float] = None
-
-        # Historial
+        # historial de órdenes completas
         self.completed_orders: List[dict] = []
 
-    # -------------------------
-    # Configuración restaurante
-    # -------------------------
-    def set_restaurant_location(self, lat: float, lon: float):
-        self.rest_lat = lat
-        self.rest_lon = lon
+        # estadísticas globales
+        self.stats = {
+            "total_dispatched_orders": 0,
+            "distance_by_delivery": {},  # delivery_id -> km
+            "liters_by_delivery": {},  # delivery_id -> liters
+            "orders_by_delivery": {},  # delivery_id -> count
+        }
 
-    # -------------------------
-    # Registro repartidor
-    # -------------------------
+    # ------------------------
+    # Registro y estado
+    # ------------------------
     def register_delivery(self, delivery_id: str):
         if not delivery_id:
             return
-        self.registered_deliveries.add(delivery_id)
-        # Inicializar estado si no existe
         if delivery_id not in self.deliveries:
             self.deliveries[delivery_id] = {
-                "state": "available",
+                "status": "available",
                 "assigned_tanda": None,
-                "delivered_count": 0,
-                "distance_km": 0.0,
-                "fuel_liters": 0.0,
-                "last_location": (self.rest_lat, self.rest_lon),
+                "stats": {
+                    "distance": 0.0,
+                    "orders_delivered": 0
+                }
             }
 
-    def is_registered(self, delivery_id: str) -> bool:
-        return delivery_id in self.registered_deliveries
+    def set_delivery_available(self, delivery_id: str):
+        if delivery_id in self.deliveries:
+            self.deliveries[delivery_id]["status"] = "available"
+            self.deliveries[delivery_id]["assigned_tanda"] = None
+            # intentar asignar tandas pendientes
+            self._try_assign_tandas()
 
-    # -------------------------
+    def set_delivery_busy(self, delivery_id: str, tanda_id: int):
+        if delivery_id in self.deliveries:
+            self.deliveries[delivery_id]["status"] = "busy"
+            self.deliveries[delivery_id]["assigned_tanda"] = tanda_id
+
+    # ------------------------
     # Encolar orden (cliente)
-    # -------------------------
-    def enqueue_order(self, order: dict) -> dict:
+    # ------------------------
+    def enqueue_order(self, order: dict):
         """
-        order: dict expected keys:
-          - id (order id)
-          - user (client id)
-          - items, total, etc (optional)
-          - lat, lon (recommended)
-        Returns the order dict enriched with: code, status, zone, enqueued_at
+        Recibe la orden (contiene lat, lon, id, code etc).
+        Calcula zona y distancia, pone en la cola de zona,
+        genera ETA estimado y si corresponde crea tanda.
         """
-        code = generate_code()
-        order["code"] = code
-        order["status"] = "pending"
-        order["enqueued_at"] = time.time()
-
-        # Determine zone
         lat = order.get("lat")
         lon = order.get("lon")
-        zone = "UNKNOWN"
-        if self.rest_lat is not None and self.rest_lon is not None and lat is not None and lon is not None:
-            zone = zone_from_coords(self.rest_lat, self.rest_lon, lat, lon)
-        else:
-            # if rest coords not set, try to default to UNKNOWN
-            zone = "UNKNOWN"
-        order["zone"] = zone
+        if lat is None or lon is None:
+            # no podemos procesar sin ubicación
+            order["status"] = "pending_no_location"
+            return order
 
-        # Append to zone queue
-        q = self.zone_queues.get(zone, self.zone_queues["UNKNOWN"])
-        q.append(order)
+        # distancia desde restaurante
+        dist_km = round(haversine_km(RESTAURANT_COORDS[0], RESTAURANT_COORDS[1], lat, lon), 2)
+        order["distance_km"] = dist_km
 
-        # Try to create tanda if conditions met
-        self._maybe_create_tanda(zone)
+        # zona
+        order_zone = zone_from_coords(lat, lon)
+        order["zone"] = order_zone
 
-        # If there's tanda(s) in tanda_queue and some available deliveries, try assign
-        self._try_assign_from_tanda_queue()
+        # timestamps
+        order["enqueued_at"] = time.time()
+        order["code"] = order.get("code") or generate_code()
+        order["status"] = "pending"
+
+        # estimación simple de tiempo: base + distance*KM_TO_MIN + cola_factor
+        queue_len = len(self.zone_queues[order_zone])
+        eta_min = int(BASE_PREP_MIN + dist_km * KM_TO_MIN + queue_len * 5)
+        order["eta_min"] = eta_min
+
+        # push a la cola de zona
+        self.zone_queues[order_zone].append(order)
+
+        # chequear si hay que crear una tanda
+        self._maybe_create_tanda(order_zone)
+
+        # intentar asignar tandas si hay repartidores
+        self._try_assign_tandas()
 
         return order
 
-    # -------------------------
-    # Revisar condiciones para crear tanda
-    # -------------------------
+    # ------------------------
+    # Crear tanda desde cola de zona
+    # ------------------------
     def _maybe_create_tanda(self, zone: str):
-        q = self.zone_queues.get(zone)
+        """
+        Crea tanda si:
+         - la cola alcanzó TANDA_MAX pedidos
+         - o el primer pedido lleva más de TANDA_MAX_WAIT_SECONDS esperando
+        """
+        q = self.zone_queues[zone]
         if not q:
             return
 
-        # Condición 1: cola >= max_per_tanda
-        if len(q) >= self.max_per_tanda:
-            self._create_tanda_from_zone(zone)
-            return
+        first_enqueued = q[0]
+        wait = time.time() - first_enqueued.get("enqueued_at", time.time())
 
-        # Condición 2: primer pedido espera > max_wait_seconds
-        first = q[0]
-        wait = time.time() - first.get("enqueued_at", time.time())
-        if wait >= self.max_wait_seconds:
-            self._create_tanda_from_zone(zone)
-            return
+        if len(q) >= TANDA_MAX or wait >= TANDA_MAX_WAIT_SECONDS:
+            # crear tanda con hasta TANDA_MAX pedidos (FIFO)
+            items = []
+            for _ in range(min(TANDA_MAX, len(q))):
+                items.append(q.popleft())
 
-    # -------------------------
-    # Crear tanda (saca hasta max_per_tanda de la cola de zona)
-    # -------------------------
-    def _create_tanda_from_zone(self, zone: str):
-        q = self.zone_queues.get(zone)
-        if not q:
-            return None
+            tanda_id = self._next_tanda_id
+            self._next_tanda_id += 1
 
-        orders = []
-        for _ in range(min(self.max_per_tanda, len(q))):
-            orders.append(q.popleft())
+            # construir árbol ordenado por distancia (BST mediana)
+            items_sorted = sorted(items, key=lambda o: o["distance_km"])
+            root = build_balanced_bst(items_sorted)
+            # obtener recorrido inorder (que dará de más cercano a más lejano)
+            ordered_list = []
+            inorder_traversal(root, ordered_list)
 
-        # calcular distancias al restaurante
-        enriched = []
-        for o in orders:
-            lat = o.get("lat")
-            lon = o.get("lon")
-            if self.rest_lat is not None and lat is not None:
-                d = haversine_km(self.rest_lat, self.rest_lon, lat, lon)
-            else:
-                d = float("inf")
-            enriched.append((o, d))
-
-        # ordenar por distancia (asc)
-        enriched_sorted = sorted(enriched, key=lambda x: x[1])
-
-        # construir BST balanceado y obtener inorder (lista de entregas por orden asc)
-        bst_root = build_bst_from_sorted(enriched_sorted)
-        inorder = inorder_list_from_bst(bst_root)
-
-        # crear tanda
-        self.tanda_counter += 1
-        tanda_id = self.tanda_counter
-        tanda_info = {
-            "id": tanda_id,
-            "zone": zone,
-            "orders": [entry["order"] for entry in inorder],
-            "bst_root": bst_root,
-            "inorder": inorder,  # list of {"order":..., "distance":...}
-            "current_idx": 0,
-            "created_at": time.time(),
-            "delivery_id": None,
-        }
-        self.tandas[tanda_id] = tanda_info
-
-        # Encolar la tanda (si no hay delivery disponible se quedará en tanda_queue)
-        self.tanda_queue.append(tanda_id)
-
-        # Intentar asignar la tanda inmediatamente
-        self._try_assign_from_tanda_queue()
-
-        return tanda_info
-
-    # -------------------------
-    # Intentar asignar tandas desde tanda_queue
-    # -------------------------
-    def _try_assign_from_tanda_queue(self):
-        # while hay tandas y hay algún delivery registrado (sea available o no)
-        while self.tanda_queue:
-            tanda_id = self.tanda_queue[0]
-            # buscar repartidor available
-            available_id = None
-            for d_id, st in self.deliveries.items():
-                if st["state"] == "available":
-                    available_id = d_id
-                    break
-
-            if available_id is not None:
-                # asignar a available
-                self.tanda_queue.popleft()
-                self._assign_tanda_to_delivery(tanda_id, available_id)
-                continue
-
-            # Si no hay available, por letra: asignar aleatoriamente incluso si ocupado
-            # (Se hace una sola asignación por tanda si hay repartidores registrados)
-            if self.registered_deliveries:
-                chosen = random.choice(list(self.registered_deliveries))
-                self.tanda_queue.popleft()
-                self._assign_tanda_to_delivery(tanda_id, chosen, force=True)
-                continue
-
-            # Si no hay repartidores registrados en absoluto, no podemos asignar
-            break
-
-    # -------------------------
-    # Asignar tanda a delivery
-    # -------------------------
-    def _assign_tanda_to_delivery(self, tanda_id: int, delivery_id: str, force: bool = False):
-        tanda = self.tandas.get(tanda_id)
-        if not tanda:
-            return False
-
-        # Si delivery no registrado, registrar (comodín)
-        if delivery_id not in self.deliveries:
-            self.deliveries[delivery_id] = {
-                "state": "available",
-                "assigned_tanda": None,
-                "delivered_count": 0,
-                "distance_km": 0.0,
-                "fuel_liters": 0.0,
-                "last_location": (self.rest_lat, self.rest_lon),
+            tanda = {
+                "id": tanda_id,
+                "zone": zone,
+                "orders": ordered_list,  # orden a entregar: de más cercano a más lejano
+                "created_at": time.time(),
+                "assigned_to": None,
+                "status": "pending"
             }
-            self.registered_deliveries.add(delivery_id)
+            self.tandas[tanda_id] = tanda
+            self.pending_tandas.append(tanda_id)
 
-        delivery = self.deliveries[delivery_id]
+    # ------------------------
+    # Intentar asignar tandas a repartidores libres
+    # ------------------------
+    def _try_assign_tandas(self):
+        if not self.pending_tandas:
+            return
 
-        # Si delivery ya ocupado y no forzamos, no asignamos
-        if delivery["state"] == "busy" and not force:
-            return False
+        # obtener lista de available deliveries
+        available = [d for d, info in self.deliveries.items() if info["status"] == "available"]
 
-        # Asignación
-        delivery["state"] = "busy"
-        delivery["assigned_tanda"] = tanda_id
-        # establecer last_location si no existe
-        if delivery.get("last_location") is None:
-            delivery["last_location"] = (self.rest_lat, self.rest_lon)
+        while available and self.pending_tandas:
+            delivery_id = available.pop(0)
+            tanda_id = self.pending_tandas.popleft()
+            tanda = self.tandas.get(tanda_id)
+            if not tanda:
+                continue
 
-        tanda["delivery_id"] = delivery_id
+            # asignar tanda al delivery
+            tanda["assigned_to"] = delivery_id
+            tanda["status"] = "assigned"
+            tanda["assigned_at"] = time.time()
+            self.deliveries[delivery_id]["status"] = "busy"
+            self.deliveries[delivery_id]["assigned_tanda"] = tanda_id
 
-        # Establecer active "current order" mapping para compatibilidad simple:
-        current = tanda["inorder"][tanda["current_idx"]]["order"]
-        # active_orders: map delivery -> current order (compat con versiones previas)
-        # guardamos un snapshot simple: order id y code
-        # Note: no se usa active_orders extensivamente aquí, la mecánica está en tanda.
-        # Pero para compatibilidad mantenemos el atributo.
-        # (Si es necesario, se puede exponer active_orders dict).
-        # No retornamos nada.
-        return True
+            # initialize per-delivery tracking if missing
+            self.stats["distance_by_delivery"].setdefault(delivery_id, 0.0)
+            self.stats["orders_by_delivery"].setdefault(delivery_id, 0)
 
-    # -------------------------
-    # Verificar código y marcar entregado
-    # -------------------------
+    # ------------------------
+    # Verificar código y marcar entrega por parte del delivery
+    # delivery_id envía el código del cliente para confirmar la entrega
+    # ------------------------
     def verify_and_mark_delivered(self, delivery_id: str, code: str) -> bool:
         """
-        Se espera que delivery_id tenga una tanda asignada.
-        El método verifica el código del pedido actualmente en curso por el delivery,
-        y si coincide, marca como entregado y avanza al siguiente pedido de la tanda.
-
-        Devuelve True si el código coincide y la entrega se marcó como completada.
+        Se espera que el repartidor tenga una tanda activa.
+        Verificamos que el siguiente pedido en la tanda tenga ese código.
+        Si corresponde, lo marcamos como entregado y avanzamos al siguiente.
         """
         if delivery_id not in self.deliveries:
             return False
 
-        delivery = self.deliveries[delivery_id]
-        tanda_id = delivery.get("assigned_tanda")
-        if tanda_id is None:
+        info = self.deliveries[delivery_id]
+        tanda_id = info.get("assigned_tanda")
+        if not tanda_id:
             return False
 
         tanda = self.tandas.get(tanda_id)
         if not tanda:
-            # inconsistencias: liberar estado
-            delivery["assigned_tanda"] = None
-            delivery["state"] = "available"
             return False
 
-        idx = tanda["current_idx"]
-        if idx >= len(tanda["inorder"]):
-            # tanda ya completada, limpiar
-            delivery["assigned_tanda"] = None
-            delivery["state"] = "available"
+        # la tanda mantiene "orders" en orden de entrega (más cercano -> más lejano)
+        if not tanda["orders"]:
+            # no quedan órdenes (deberíamos liberar al delivery)
+            tanda["status"] = "completed"
+            self._finalize_tanda(tanda_id, delivery_id)
             return False
 
-        current_entry = tanda["inorder"][idx]
-        order = current_entry["order"]
-        expected_code = order.get("code", "").upper()
-
-        if expected_code != (code or "").upper():
+        current_order = tanda["orders"][0]
+        if current_order.get("code", "").upper() != code.upper():
             return False
 
-        # --- código válido: marcar como entregado ---
-        order["status"] = "delivered"
-        order["delivered_at"] = time.time()
-        self.completed_orders.append(order)
-        delivery["delivered_count"] = delivery.get("delivered_count", 0) + 1
+        # Coincide: marcar orden como entregada
+        current_order["status"] = "delivered"
+        current_order["delivered_at"] = time.time()
+        current_order["delivered_by"] = delivery_id
 
-        # calcular distancia recorrida desde last_location -> order location
-        last_loc = delivery.get("last_location", (self.rest_lat, self.rest_lon))
-        lat = order.get("lat")
-        lon = order.get("lon")
-        if lat is not None and lon is not None and last_loc[0] is not None:
-            dist = haversine_km(last_loc[0], last_loc[1], lat, lon)
-            if not (dist is None or dist != dist):  # check not NaN
-                delivery["distance_km"] += dist
-                delivery["fuel_liters"] = delivery["distance_km"] / 10.0  # 1 L per 10 km
-            delivery["last_location"] = (lat, lon)
+        # actualizar estadísticas (distancia recorrida estimada y litros)
+        dist = float(current_order.get("distance_km", 0.0))
+        self.stats["total_dispatched_orders"] += 1
+        self.stats["distance_by_delivery"].setdefault(delivery_id, 0.0)
+        self.stats["distance_by_delivery"][delivery_id] += dist
+        self.stats["orders_by_delivery"].setdefault(delivery_id, 0)
+        self.stats["orders_by_delivery"][delivery_id] += 1
+        liters = dist * LITERS_PER_KM
+        self.stats["liters_by_delivery"].setdefault(delivery_id, 0.0)
+        self.stats["liters_by_delivery"][delivery_id] += liters
+
+        # mover orden al historial
+        self.completed_orders.append(current_order)
+        # removerla de la tanda (avanza al siguiente)
+        tanda["orders"].pop(0)
+
+        # Si ya no quedan órdenes en la tanda, finalizarla
+        if not tanda["orders"]:
+            tanda["status"] = "completed"
+            self._finalize_tanda(tanda_id, delivery_id)
         else:
-            # si no hay coords, no sumamos distancia
-            dist = 0.0
-
-        # Avanzar al siguiente pedido en la tanda
-        tanda["current_idx"] += 1
-
-        # Si quedan pedidos, actualizamos (current order será el siguiente)
-        if tanda["current_idx"] < len(tanda["inorder"]):
-            next_order = tanda["inorder"][tanda["current_idx"]]["order"]
-            # guardamos/actualizamos si se necesita
-            # (no hacemos notificaciones aquí; la integración externa debería notificar al delivery)
-        else:
-            # tanda completada
-            tanda["completed_at"] = time.time()
-            # liberar delivery
-            delivery["assigned_tanda"] = None
-            delivery["state"] = "available"
-            tanda["delivery_id"] = None
-            # opcional: reasignar nuevas tandas en cola
-            self._try_assign_from_tanda_queue()
+            # Si quedan órdenes, la tanda sigue activa; el delivery continúa
+            pass
 
         return True
 
-    # -------------------------
-    # Método utilitario: obtener estado actual (para consola/testing)
-    # -------------------------
-    def status_overview(self) -> Dict[str, Any]:
-        """Devuelve un snapshot con métricas y colas (útil para debugging)."""
-        overview = {
-            "registered_deliveries": list(self.registered_deliveries),
-            "deliveries": self.deliveries,
-            "zone_queue_lengths": {z: len(q) for z, q in self.zone_queues.items()},
-            "tanda_queue": list(self.tanda_queue),
-            "tandas_active": {
-                tid: {
-                    "zone": t["zone"],
-                    "total_orders": len(t["orders"]),
-                    "current_idx": t["current_idx"],
-                    "delivery_id": t["delivery_id"],
-                }
-                for tid, t in self.tandas.items()
-            },
-            "completed_orders_count": len(self.completed_orders),
-        }
-        return overview
+    # ------------------------
+    # Finalizar tanda y liberar repartidor
+    # ------------------------
+    def _finalize_tanda(self, tanda_id: int, delivery_id: Optional[str]=None):
+        tanda = self.tandas.get(tanda_id)
+        if not tanda:
+            return
+        tanda["ended_at"] = time.time()
+        tanda["status"] = "completed"
+        # liberar delivery
+        if delivery_id:
+            if delivery_id in self.deliveries:
+                self.deliveries[delivery_id]["status"] = "available"
+                self.deliveries[delivery_id]["assigned_tanda"] = None
+        # eliminar tanda de memoria (opcional mantener historial)
+        # del self.tandas[tanda_id]
+        # intentar asignar otras tandas pendientes
+        self._try_assign_tandas()
 
-    # -------------------------
-    # Métricas finales (console report)
-    # -------------------------
-    def report(self) -> Dict[str, Any]:
-        """Reporte resumido para mostrar en consola (total entregados, distancias, combustible)."""
-        per_delivery = {}
-        total_delivered = len(self.completed_orders)
-        total_distance = 0.0
-        total_fuel = 0.0
-        for d_id, st in self.deliveries.items():
-            per_delivery[d_id] = {
-                "delivered_count": st.get("delivered_count", 0),
-                "distance_km": round(st.get("distance_km", 0.0), 2),
-                "fuel_liters": round(st.get("fuel_liters", 0.0), 2),
-            }
-            total_distance += st.get("distance_km", 0.0)
-            total_fuel += st.get("fuel_liters", 0.0)
+    # ------------------------
+    # Consultas / utilidades
+    # ------------------------
+    def get_pending_counts(self):
+        return {z: len(q) for z, q in self.zone_queues.items()}
 
-        report = {
-            "total_orders_delivered": total_delivered,
-            "total_distance_km": round(total_distance, 2),
-            "total_fuel_liters": round(total_fuel, 2),
-            "per_delivery": per_delivery,
-            "clients_and_orders": [
-                {"order_id": o.get("id"), "client": o.get("user"), "items": o.get("items"), "status": o.get("status")}
-                for o in self.completed_orders
-            ],
-        }
-        return report
+    def get_tanda_info(self, tanda_id: int) -> Optional[dict]:
+        return self.tandas.get(tanda_id)
 
+    def get_stats(self):
+        return self.stats
 
-# Instancia global
+# instancia global
 DELIVERY_MANAGER = DeliveryManager()
