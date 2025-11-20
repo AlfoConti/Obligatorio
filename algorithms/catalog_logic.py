@@ -7,13 +7,11 @@ from whatsapp_service import (
     send_whatsapp_text
 )
 
-# IMPORTS CORRECTOS
-from algorithms.users_and_cart import UserManager
-from utils.cart_management import CartManager
+# IMPORTS CORRECTOS — SOLO UNO
+from algorithms.users_and_cart import USERS, CART
 
-# instancias globales
-USERS = UserManager()
-CART = CartManager()
+# NO crear nuevos UserManager()
+# NO crear nuevos CartManager()
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 CATALOG_PATH = os.path.join(BASE_DIR, "data", "catalog.json")
@@ -195,7 +193,6 @@ def save_cart_line(number: str, note: str = ""):
 
     CART.add(user, prod, user.pending_qty, note)
 
-    # reset estado
     user.pending_product_id = None
     user.pending_qty = None
     USERS.set_state(number, "browsing")
@@ -204,7 +201,7 @@ def save_cart_line(number: str, note: str = ""):
 
 
 # ============================================================
-#                     MOSTRAR CARRITO (FIX)
+#                     MOSTRAR CARRITO
 # ============================================================
 
 def send_cart(number: str):
@@ -212,10 +209,8 @@ def send_cart(number: str):
 
     text = CART.format(user)
 
-    # Enviamos primero el texto
     send_whatsapp_text(number, text)
 
-    # Luego botones
     buttons = [
         {"id": "cart_finish", "title": "✅ Finalizar pedido"},
         {"id": "cart_add_more", "title": "➕ Agregar producto"},
