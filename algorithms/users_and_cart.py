@@ -9,8 +9,9 @@ from typing import Dict, List, Optional
 # ============================================================
 
 class User:
-    def __init__(self, number: str):
-        self.number = number
+    def __init__(self, phone: str):
+        # Número de WhatsApp (nombre unificado)
+        self.phone = phone
         self.created_at = time.time()
 
         # Datos básicos
@@ -29,8 +30,14 @@ class User:
         self.pending_product_id: Optional[str] = None
         self.pending_qty: Optional[int] = None
 
-        # Carrito real (solo líneas, CartManager se encarga del resto)
+        # Carrito real (solo líneas, CartManager controla totales)
         self.cart: List[dict] = []
+
+    def reset_flow(self):
+        """Reinicia el flujo del usuario."""
+        self.state = "idle"
+        self.pending_product_id = None
+        self.pending_qty = None
 
 
 # ============================================================
@@ -41,25 +48,30 @@ class UserManager:
     def __init__(self):
         self.users: Dict[str, User] = {}
 
-    def get(self, number: str) -> User:
-        if number not in self.users:
-            self.users[number] = User(number)
-        return self.users[number]
+    def get(self, phone: str) -> User:
+        """Obtiene o crea un usuario por su número."""
+        if phone not in self.users:
+            self.users[phone] = User(phone)
+        return self.users[phone]
 
-    def set_state(self, number: str, state: str):
-        self.get(number).state = state
+    def set_state(self, phone: str, state: str):
+        self.get(phone).state = state
 
-    def get_state(self, number: str) -> str:
-        return self.get(number).state
+    def get_state(self, phone: str) -> str:
+        return self.get(phone).state
 
-    def reset_catalog_flow(self, number: str):
-        u = self.get(number)
+    def reset_catalog_flow(self, phone: str):
+        u = self.get(phone)
         u.page = 0
         u.category = "Todos"
         u.sort = None
         u._filtered = []
 
-    def set_pending_product(self, number: str, prod_id: str):
-        u = self.get(number)
+    def set_pending_product(self, phone: str, prod_id: str):
+        u = self.get(phone)
         u.pending_product_id = prod_id
         u.pending_qty = None
+
+
+# Instancia global que usará main.py
+USER_MANAGER = UserManager()

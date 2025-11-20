@@ -117,10 +117,14 @@ class CartManager:
 
             total += qty * price
 
+        # -------------- FIX MÁS IMPORTANTE -------------------
+        # user.phone NO EXISTE → debe ser user.number
+        # -----------------------------------------------------
+
         order = {
             "id": order_id,
             "code": code,
-            "user": user.phone,
+            "user": user.number,     # ✔ FIX CORRECTO
             "items": items,
             "total": round(total, 2),
             "lat": lat,
@@ -130,7 +134,6 @@ class CartManager:
         }
 
         self.orders.append(order)
-
         user.cart.clear()  # vaciar carrito
 
         return order
@@ -146,7 +149,6 @@ USERS = {}
 CART = {}
 
 
-# Reemplaza la vieja función
 def save_cart_line(user, product, qty, note):
     CART_MANAGER.add(user, product, qty, note)
 
