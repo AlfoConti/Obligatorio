@@ -1,210 +1,219 @@
-# algorithms/users_and_cart.py
+# dentro de algorithms/users_and_cart.py reemplaza la clase CartManager por esta
 
+import random
 import time
-from typing import Dict, List, Optional
+from math import ceil
+from typing import Optional
 
+from utils.geo_calculator import haversine_km  # usa tu módulo existente
 
-# ============================================================
-#                    MODELO DE USUARIO
-# ============================================================
-
-class User:
-    def __init__(self, number: str):
-        self.number = number
-        self.created_at = time.time()
-
-        # Datos
-        self.name = None
-
-        # Estado conversacional
-        self.state = "idle"
-
-        # Catálogo
-        self.category = "Todos"
-        self.sort = None
-        self.page = 0
-        self._filtered = []
-
-        # Flujo de compra temporal
-        self.pending_product_id: Optional[str] = None
-        self.pending_qty: Optional[int] = None
-
-        # Carrito
-        self.cart: List[dict] = []
-
-
-# ============================================================
-#                       USER MANAGER
-# ============================================================
-
-class UserManager:
-    def __init__(self):
-        self.users: Dict[str, User] = {}
-
-    def get(self, number: str) -> User:
-        if number not in self.users:
-            self.users[number] = User(number)
-        return self.users[number]
-
-    def set_state(self, number: str, state: str):
-        self.get(number).state = state
-
-    def get_state(self, number: str) -> str:
-        return self.get(number).state
-
-    def reset_catalog_flow(self, number: str):
-        u = self.get(number)
-        u.page = 0
-        u.category = "Todos"
-        u.sort = None
-        u._filtered = []
-
-    def set_pending_product(self, number: str, prod_id: str):
-        u = self.get(number)
-        u.pending_product_id = prod_id
-        u.pending_qty = None
-
-
-# ============================================================
-#                         CART MANAGER
-# ============================================================
 
 class CartManager:
-    def __init__(self):
-        pass
+    """
+    CartManager unificado:
+    - estructura de items: {"product": dict, "qty": int, "note": str, "subtotal": float}
+    - métodos: add, increment, decrement, remove, clear, total, get, format, update_subtotals, create_order
+    """
 
-    # -------------------------------
-    # Helpers
-    # -------------------------------
+    def __init__(self, restaurant_coord: tuple = (-34.9011, -56.1645)):
+        self.orders = []  # historial de órdenes (ordenes confirmadas)
+        self.restaurant_coord = restaurant_coord
 
+    # -------------------------
+    # Helpers internos
+    # -------------------------
     def _get_product_name(self, product: dict) -> str:
-        return (
-            product.get("nombre")
-            or product.get("name")
-            or f"Producto-{product.get('id','')}"
-        )
+        return product.get("nombre") or product.get("name") or f"Producto-{product.get('id','')}"
 
     def _get_product_price(self, product: dict) -> float:
         for k in ("precio", "price", "cost"):
             if k in product:
                 try:
                     return float(product[k])
-                except:
+                except Exception:
                     try:
                         return float(str(product[k]).replace(",", "."))
-                    except:
+                    except Exception:
                         return 0.0
         return 0.0
 
-    # -------------------------------
+    def _gen_code6(self) -> str:
+        return "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=6))
+
+    # -------------------------
     # Add
-    # -------------------------------
+    # -------------------------
+    def add(self, user, product: dict, qty: int, note: str = "") -> dict:
+        """
+        Añade una línea al carrito del user. Valida qty y calcula subtotal.
+        """
+        try:
+            qty = int(qty)
+            if qty <= 0:
+                qty = 1
+        except Exception:
+            qty = 1
 
-    def add(self, user: User, product: dict, qty: int, note: str = "") -> dict:
-        name = self._get_product_name(product)
         price = self._get_product_price(product)
-
         line = {
             "product": product,
-            "qty": int(qty),
-            "note": note.strip(),
-            "subtotal": round(price * int(qty), 2)
+            "qty": qty,
+            "note": (note or "").strip(),
+            "subtotal": round(price * qty, 2)
         }
-
+        if not hasattr(user, "cart") or user.cart is None:
+            user.cart = []
         user.cart.append(line)
         return line
 
-    # -------------------------------
-    # UPDATE SUBTOTALS
-    # -------------------------------
-
-    def update_subtotals(self, user: User):
+    # -------------------------
+    # Update subtotals
+    # -------------------------
+    def update_subtotals(self, user) -> None:
         """Recalcula subtotales y total después de editar cantidades."""
+        if not getattr(user, "cart", None):
+            return
         for item in user.cart:
             price = self._get_product_price(item["product"])
-            item["subtotal"] = round(price * item["qty"], 2)
+            item["subtotal"] = round(price * int(item.get("qty", 0)), 2)
 
-    # -------------------------------
-    # Incrementar cantidad
-    # -------------------------------
-
-    def increment(self, user: User, index: int) -> bool:
+    # -------------------------
+    # Increment / Decrement
+    # -------------------------
+    def increment(self, user, index: int) -> bool:
+        if not getattr(user, "cart", None):
+            return False
         if 0 <= index < len(user.cart):
-            user.cart[index]["qty"] += 1
+            user.cart[index]["qty"] = int(user.cart[index]["qty"]) + 1
             self.update_subtotals(user)
             return True
         return False
 
-    # -------------------------------
-    # Restar cantidad
-    # -------------------------------
-
-    def decrement(self, user: User, index: int) -> bool:
+    def decrement(self, user, index: int) -> bool:
+        if not getattr(user, "cart", None):
+            return False
         if 0 <= index < len(user.cart):
-            if user.cart[index]["qty"] > 1:
-                user.cart[index]["qty"] -= 1
+            if int(user.cart[index]["qty"]) > 1:
+                user.cart[index]["qty"] = int(user.cart[index]["qty"]) - 1
                 self.update_subtotals(user)
                 return True
         return False
 
-    # -------------------------------
-    # Remove por índice
-    # -------------------------------
-
-    def remove(self, user: User, index: int) -> bool:
+    # -------------------------
+    # Remove / Clear
+    # -------------------------
+    def remove(self, user, index: int) -> bool:
+        if not getattr(user, "cart", None):
+            return False
         if 0 <= index < len(user.cart):
             user.cart.pop(index)
             return True
         return False
 
-    # -------------------------------
-    # Clear
-    # -------------------------------
-
-    def clear(self, user: User):
+    def clear(self, user) -> None:
         user.cart = []
 
-    # -------------------------------
-    # Total
-    # -------------------------------
+    # -------------------------
+    # Totals / Get
+    # -------------------------
+    def total(self, user) -> float:
+        if not getattr(user, "cart", None):
+            return 0.0
+        return round(sum(item.get("subtotal", 0.0) for item in user.cart), 2)
 
-    def total(self, user: User) -> float:
-        return round(sum(item.get("subtotal", 0) for item in user.cart), 2)
+    def get(self, user):
+        return user.cart if getattr(user, "cart", None) else []
 
-    # -------------------------------
-    # Get
-    # -------------------------------
-
-    def get(self, user: User):
-        return user.cart
-
-    # -------------------------------
-    # Format
-    # -------------------------------
-
-    def format(self, user: User) -> str:
-        cart = user.cart
-
+    # -------------------------
+    # Format (texto para WhatsApp)
+    # -------------------------
+    def format(self, user) -> str:
+        cart = self.get(user)
         if not cart:
             return "🛒 Tu carrito está vacío."
 
-        msg = "🛒 *Tu carrito:*\n"
-
+        msg_lines = ["🛒 *Tu carrito:*\n"]
         for idx, item in enumerate(cart, start=1):
-            product = item["product"]
-            name = self._get_product_name(product)
-            price = self._get_product_price(product)
-
-            msg += (
-                f"\n*{idx}) {name}*\n"
+            prod = item["product"]
+            name = self._get_product_name(prod)
+            price = self._get_product_price(prod)
+            note = item.get("note", "")
+            msg_lines.append(
+                f"*{idx}) {name}*\n"
                 f"Cantidad: {item['qty']}\n"
-                f"Precio: ${price:.2f}\n"
+                f"Precio uni: ${price:.2f}\n"
                 f"Subtotal: ${item['subtotal']:.2f}\n"
             )
+            if note:
+                msg_lines.append(f"📝 Nota: {note}\n")
+        msg_lines.append(f"\n💰 *Total: ${self.total(user)}*")
+        return "\n".join(msg_lines)
 
-            if item["note"]:
-                msg += f"📝 Nota: {item['note']}\n"
+    # -------------------------
+    # Crear orden (temporal en el prototipo)
+    # -------------------------
+    def create_order(self, user, lat: Optional[float] = None, lon: Optional[float] = None):
+        """
+        Crea una orden a partir del carrito, calcula distancia y ETA si lat/lon se proveen,
+        genera código de 6 chars y agrega a historial self.orders.
+        Devuelve la orden dict.
+        """
+        cart = self.get(user)
+        if not cart:
+            return None
 
-        msg += f"\n💰 *Total: ${self.total(user)}*"
+        # construir items
+        items = []
+        total = 0.0
+        for it in cart:
+            prod = it["product"]
+            qty = int(it["qty"])
+            price = self._get_product_price(prod)
+            subtotal = round(price * qty, 2)
+            items.append({
+                "id": prod.get("id"),
+                "nombre": prod.get("nombre"),
+                "qty": qty,
+                "price": price,
+                "note": it.get("note", ""),
+                "subtotal": subtotal
+            })
+            total += subtotal
 
-        return msg
+        order_id = len(self.orders) + 1
+        code6 = self._gen_code6()
+        now_ts = time.time()
+
+        order = {
+            "id": order_id,
+            "code": code6,
+            "user": user.number if hasattr(user, "number") else getattr(user, "phone", None),
+            "items": items,
+            "total": round(total, 2),
+            "lat": lat,
+            "lon": lon,
+            "created_at": now_ts,
+            "status": "pending"
+        }
+
+        # calcular distancia y ETA si hay coords
+        if lat is not None and lon is not None:
+            try:
+                dist_km = haversine_km(self.restaurant_coord[0], self.restaurant_coord[1], float(lat), float(lon))
+                # estimación simple: 0.5 km/min -> 10 km = 20 min
+                eta_min = max(5, int(ceil(dist_km / 0.5)))
+                order["distance_km"] = round(dist_km, 2)
+                order["eta_min"] = eta_min
+            except Exception:
+                order["distance_km"] = None
+                order["eta_min"] = None
+        else:
+            order["distance_km"] = None
+            order["eta_min"] = None
+
+        self.orders.append(order)
+
+        # vaciar carrito del usuario
+        self.clear(user)
+
+        return order
