@@ -7,9 +7,9 @@ from whatsapp_service import (
     send_whatsapp_text
 )
 
-# IMPORTS CORREGIDOS
+# IMPORTS CORRECTOS
 from algorithms.users_and_cart import UserManager
-from utils.cart_management import CartManager  # ← EL CARRITO CORRECTO
+from utils.cart_management import CartManager
 
 # instancias globales
 USERS = UserManager()
@@ -204,7 +204,7 @@ def save_cart_line(number: str, note: str = ""):
 
 
 # ============================================================
-#                     MOSTRAR CARRITO (FIX 2025)
+#                     MOSTRAR CARRITO (FIX)
 # ============================================================
 
 def send_cart(number: str):
@@ -212,10 +212,10 @@ def send_cart(number: str):
 
     text = CART.format(user)
 
-    # PRIMERO enviamos el texto — seguro y sin límite
-    send_whatsapp_text(number, f"🛒 *Tu Carrito:*\n\n{text}")
+    # Enviamos primero el texto
+    send_whatsapp_text(number, text)
 
-    # LUEGO mandamos los botones aparte — esto evita errores en WhatsApp
+    # Luego botones
     buttons = [
         {"id": "cart_finish", "title": "✅ Finalizar pedido"},
         {"id": "cart_add_more", "title": "➕ Agregar producto"},
@@ -231,7 +231,7 @@ def send_cart(number: str):
 
 
 # ============================================================
-#                 MENÚ PARA EDITAR CARRITO
+#                     EDITAR CARRITO
 # ============================================================
 
 def send_edit_menu(number: str):
@@ -257,7 +257,7 @@ def send_edit_menu(number: str):
 
 
 # ============================================================
-#           ACCIONES SOBRE UN PRODUCTO (EDITAR/BORRAR)
+#                  ACCIONES DE EDICIÓN
 # ============================================================
 
 def send_edit_actions(number: str, index: int):

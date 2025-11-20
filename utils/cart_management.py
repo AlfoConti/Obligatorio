@@ -4,10 +4,9 @@ import random
 import time
 from math import radians, sin, cos, sqrt, atan2
 
-
-# ======================
-# UTILS PARA DISTANCIA
-# ======================
+# =========================================
+# DISTANCIA GEO
+# =========================================
 
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
@@ -19,34 +18,20 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return R * c
 
 
-# ======================
+# =========================================
 # NUEVO CART MANAGER
-# ======================
+# =========================================
 
 class CartManager:
-    """
-    Carrito moderno: trabaja con productos reales (dicts) y soporta:
-    - cantidad
-    - nota opcional
-    - cálculo de total
-    - formateo amigable
-    - creación de órdenes
-    """
 
     def __init__(self):
         self.orders = []  # historial de órdenes
 
     # ----------------------------------------------------------
-    # AGREGAR PRODUCTO AL CARRITO
+    # AGREGAR PRODUCTO
     # ----------------------------------------------------------
 
     def add(self, user, product: dict, qty: int, note: str = ""):
-        """
-        user: instancia de User (UserManager.get)
-        product: dict
-        qty: int
-        note: str
-        """
         user.cart.append({
             "product": product,
             "qty": qty,
@@ -54,7 +39,7 @@ class CartManager:
         })
 
     # ----------------------------------------------------------
-    # TOTAL DEL CARRITO
+    # TOTAL
     # ----------------------------------------------------------
 
     def get_total(self, user):
@@ -65,7 +50,7 @@ class CartManager:
         return round(total, 2)
 
     # ----------------------------------------------------------
-    # FORMATO DEL CARRITO
+    # FORMATO
     # ----------------------------------------------------------
 
     def format(self, user):
@@ -73,14 +58,12 @@ class CartManager:
             return "🛒 *Tu carrito está vacío*"
 
         lines = ["🛒 *Carrito actual:*"]
-        total = 0
 
         for idx, item in enumerate(user.cart, start=1):
             prod = item["product"]
             qty = item["qty"]
             price = float(prod["precio"])
             subtotal = qty * price
-            total += subtotal
 
             note = f"\n   📝 Nota: {item['note']}" if item["note"] else ""
 
@@ -91,12 +74,12 @@ class CartManager:
                 f"Subtotal: ${subtotal:.2f}{note}"
             )
 
-        lines.append(f"\n💵 *Total:* ${round(total,2)}")
+        lines.append(f"\n💵 *Total:* ${self.get_total(user)}")
 
         return "\n".join(lines)
 
     # ----------------------------------------------------------
-    # BORRAR ITEM DEL CARRITO
+    # BORRAR ITEM
     # ----------------------------------------------------------
 
     def remove(self, user, index: int):
@@ -110,10 +93,6 @@ class CartManager:
     # ----------------------------------------------------------
 
     def create_order(self, user, lat=None, lon=None):
-        """
-        Crea una orden real desde el carrito del usuario.
-        """
-
         if not user.cart:
             return None
 
@@ -152,7 +131,44 @@ class CartManager:
 
         self.orders.append(order)
 
-        # vaciar carrito
-        user.cart.clear()
+        user.cart.clear()  # vaciar carrito
 
         return order
+
+
+# =========================================
+# COMPATIBILIDAD CON CÓDIGO ANTIGUO
+# =========================================
+
+CART_MANAGER = CartManager()
+
+USERS = {}
+CART = {}
+
+
+# Reemplaza la vieja función
+def save_cart_line(user, product, qty, note):
+    CART_MANAGER.add(user, product, qty, note)
+
+
+def send_cart(user):
+    return CART_MANAGER.format(user)
+
+
+def send_edit_menu(user):
+    if not user.cart:
+        return "🛒 *Carrito vacío*"
+
+    msg = "✏️ *Selecciona el ítem a editar:*\n"
+    for idx, item in enumerate(user.cart, start=1):
+        msg += f"\n*{idx}.* {item['product']['nombre']} (x{item['qty']})"
+    return msg
+
+
+def send_edit_actions():
+    return (
+        "✏️ *Opciones de edición:*\n"
+        "1️⃣ Cambiar cantidad\n"
+        "2️⃣ Cambiar nota\n"
+        "3️⃣ Eliminar ítem"
+    )
