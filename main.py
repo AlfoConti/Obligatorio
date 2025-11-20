@@ -1,3 +1,4 @@
+# main.py (completo)
 import os
 import uvicorn
 from fastapi import FastAPI, Request
@@ -19,12 +20,31 @@ from algorithms.catalog_logic import (
 
 from whatsapp_service import send_whatsapp_buttons, send_whatsapp_text
 
+# Delivery manager
+from algorithms.delivery_manager import DELIVERY_MANAGER
+
 app = FastAPI()
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "token123")
 
 
 def get_user_obj(number: str):
     return USERS.get(number)
+
+
+# -------------------------------------------------
+# Registrar deliveries de prueba (opcional)
+# -------------------------------------------------
+# Si quieres que los repartidores usen su teléfono como id,
+# registralos aquí usando su número (ej: "+5989...").
+# Puedes cambiar o eliminar estas líneas en producción.
+try:
+    if DELIVERY_MANAGER:
+        # registros de ejemplo (cambia a los números reales si quieres)
+        DELIVERY_MANAGER.register_delivery(os.environ.get("DELIVERY_1_ID", "delivery_1_phone"))
+        DELIVERY_MANAGER.register_delivery(os.environ.get("DELIVERY_2_ID", "delivery_2_phone"))
+except Exception as e:
+    print("⚠️ Error registrando deliveries de prueba:", e)
+
 
 # ==========================================================
 # UNIVERSAL BUTTON ID EXTRACTOR (COMPATIBLE 2024–2025)
@@ -47,6 +67,7 @@ def get_button_id(msg):
             return v.strip()
 
     return None
+
 
 # ==========================================================
 # UNIVERSAL LIST ID EXTRACTOR
@@ -108,9 +129,73 @@ async def whatsapp_webhook(request: Request):
             handle_button_reply(user_number, btn_id)
             return JSONResponse({"status": "ok"})
 
+        # ========= UBICACIÓN =========
+        if msg.get("type") == "location":
+            # Si el usuario estaba esperando ubicación, creamos la orden y encolamos
+            user = get_user_obj(user_number)
+            if getattr(user, "state", None) != "awaiting_location":
+                send_whatsapp_text(user_number, "No estoy esperando una ubicación ahora mismo. Escribe *menu* para comenzar.")
+                return JSONResponse({"status": "ok"})
+
+            loc = msg.get("location", {})
+            lat = loc.get("latitude")
+            lon = loc.get("longitude")
+            if lat is None or lon is None:
+                send_whatsapp_text(user_number, "No pude leer la ubicación. ¿Podés intentarlo de nuevo?")
+                return JSONResponse({"status": "ok"})
+
+            # Crear orden: usa CART.create_order(user, lat=..., lon=...) si tu CartManager soporta lat/lon
+            try:
+                # intenta con lat/lon si la implementación lo soporta
+                order = CART.create_order(user, lat=lat, lon=lon)
+            except TypeError:
+                # fallback: create_order() sin lat/lon y luego asignar
+                order = CART.create_order(user)
+                order["lat"] = lat
+                order["lon"] = lon
+
+            if order is None:
+                send_whatsapp_text(user_number, "No hay productos en tu carrito. Agrega algo antes de confirmar.")
+                USERS.set_state(user_number, "browsing")
+                return JSONResponse({"status": "ok"})
+
+            # Encolar la orden en el Delivery Manager
+            if DELIVERY_MANAGER is None:
+                send_whatsapp_text(user_number, "El sistema de delivery no está disponible. Intentá más tarde.")
+                USERS.set_state(user_number, "browsing")
+                return JSONResponse({"status": "ok"})
+
+            try:
+                enqueued_order = DELIVERY_MANAGER.enqueue_order(order)
+            except Exception as e:
+                print("❌ ERROR en enqueue_order:", e)
+                send_whatsapp_text(user_number, "Hubo un error al procesar tu pedido. Intentá nuevamente más tarde.")
+                USERS.set_state(user_number, "browsing")
+                return JSONResponse({"status": "ok"})
+
+            # Enviar código al cliente
+            send_whatsapp_text(user_number, f"✅ Pedido recibido. Tu código de entrega es *{enqueued_order.get('code')}*.\nTe avisaremos cuando el repartidor llegue.")
+            USERS.set_state(user_number, "browsing")
+            return JSONResponse({"status": "ok"})
+
         # ========= TEXTO =========
         if msg.get("type") == "text":
             text = msg["text"]["body"].strip().lower()
+
+            # ——— Verificación de entrega por repartidor (ej: "entrego ABC123" o solo "ABC123") ———
+            if text.startswith("entrego ") or (len(text) == 6 and text.isalnum()):
+                parts = text.split()
+                code = parts[1] if parts[0] == "entrego" and len(parts) > 1 else text.upper()
+                # asumimos que el número del repartidor está registrado como delivery id
+                delivery_id = user_number
+                ok = False
+                if DELIVERY_MANAGER:
+                    ok = DELIVERY_MANAGER.verify_and_mark_delivered(delivery_id, code)
+                if ok:
+                    send_whatsapp_text(user_number, "Código verificado. Pedido marcado como entregado. Gracias.")
+                else:
+                    send_whatsapp_text(user_number, "Código inválido o no corresponde al pedido actual.")
+                return JSONResponse({"status": "ok"})
 
             # ——— Usuario escribiendo nota ———
             if user.state == "adding_note":
@@ -239,7 +324,13 @@ def handle_button_reply(user_number: str, btn_id: str):
 
     # ——— Carrito: finalizar ———
     if btn_id == "cart_finish":
-        send_whatsapp_text(user_number, "🛍 Tu pedido fue recibido. En breve nos comunicamos contigo.")
+        # solicitamos ubicación al usuario antes de crear la orden
+        USERS.set_state(user_number, "awaiting_location")
+        send_whatsapp_text(
+            user_number,
+            "Perfecto ✅. Para confirmar el pedido por favor *comparte tu ubicación* usando el botón de Adjuntar → Ubicación.\n"
+            "Si no podes, envía tu dirección en texto (calle y número)."
+        )
         return
 
     # ——— Carrito: editar ———

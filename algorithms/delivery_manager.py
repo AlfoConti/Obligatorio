@@ -2,10 +2,25 @@
 
 import time
 import random
-import math
 from typing import Dict, List, Optional
 from structures.trees_and_queues import ZoneQueue, BSTree
-from utils.cart_management import haversine_km  # reutilizamos el helper
+
+# NOTA: haversine_km está en utils/cart_management.py
+try:
+    from utils.cart_management import haversine_km
+except Exception:
+    # fallback simple (si no existe la función)
+    from math import radians, sin, cos, sqrt, atan2
+
+    def haversine_km(lat1, lon1, lat2, lon2):
+        R = 6371.0
+        rlat1, rlon1, rlat2, rlon2 = map(radians, [lat1, lon1, lat2, lon2])
+        dlat = rlat2 - rlat1
+        dlon = rlon2 - rlon1
+        a = sin(dlat / 2) ** 2 + cos(rlat1) * cos(rlat2) * sin(dlon / 2) ** 2
+        c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return R * c
+
 
 RANDOM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
@@ -35,7 +50,7 @@ class Tanda:
     def __init__(self, id_: int, zone: str, orders: List[dict]):
         self.id = id_
         self.zone = zone
-        self.orders = orders  # lista de order dicts
+        self.orders = list(orders)  # lista de order dicts (copio)
         self.created_at = time.time()
         self.assigned_delivery: Optional[str] = None
         # Prepare BST structure (distance must be precomputed in orders as 'distance_km')
@@ -59,11 +74,11 @@ class DeliveryManager:
             "SE": ZoneQueue("SE"),
         }
 
-        # tandas pendientes (id -> Tanda)
+        # tandas (id -> Tanda)
         self.tandas: Dict[int, Tanda] = {}
         self.next_tanda_id = 1
 
-        # entregadores registrados
+        # repartidores registrados (id -> Delivery)
         self.deliveries: Dict[str, Delivery] = {}
 
         # cola de tandas pendientes (si no hay delivery available)
@@ -80,13 +95,11 @@ class DeliveryManager:
         # determinar cuadrante simple por lat/lon
         lat_dir = "N" if lat >= self.restaurant_lat else "S"
         lon_dir = "E" if lon >= self.restaurant_lon else "O"  # Oeste (O)
-        zone = f"{lat_dir}{lon_dir}"  # NE, NO, SE, SO (pero queremos NO, NE, SO, SE)
-        # fix letter order: lat+lon -> N/E => NE ; N/O => NO
-        zone = zone.replace("EO", "E").replace("OO", "O")  # safety
-        # Normalize to the four codes in our dict
-        if zone == "NE" or zone == "EN":
+        zone = f"{lat_dir}{lon_dir}"  # NE, NO, SE, SO
+        # Normalize to our 4 codes
+        if zone == "NE":
             z = "NE"
-        elif zone == "NO" or zone == "ON":
+        elif zone == "NO":
             z = "NO"
         elif zone == "SE":
             z = "SE"
@@ -101,6 +114,10 @@ class DeliveryManager:
     # Delivery management
     # ------------------------
     def register_delivery(self, id_: str, name: str = None):
+        """
+        Registra un repartidor. id_ puede ser el número de teléfono del repartidor
+        o cualquier identificador único. Si ya existe, devuelve la instancia.
+        """
         if id_ in self.deliveries:
             return self.deliveries[id_]
         d = Delivery(id_, name)
@@ -109,7 +126,7 @@ class DeliveryManager:
 
     def enqueue_order(self, order: dict):
         """
-        Espera recibir un 'order' que contenga lat, lon y user.number.
+        Espera recibir un 'order' que contenga lat, lon y user (o user.number).
         - calcula distance_km y zone
         - añade code de verificación de 6 chars
         - encola en la zona correspondiente
@@ -174,13 +191,28 @@ class DeliveryManager:
             print(f"[TANDA {tanda_id}] encolada (no hay delivery disponible).")
 
     def _notify_delivery_route(self, delivery: Delivery, tanda: Tanda):
-        # obtengo ruta inorder (de más cercano a más lejano)
+        """
+        Notifica al delivery la ruta (in-order) y envía un resumen.
+        Intenta usar whatsapp_service si está instalado; si no, solo hace print().
+        Se asume que delivery.id puede ser el teléfono del repartidor.
+        """
         route = tanda.inorder_route()
-        # Simular notificacion
-        print(f"[NOTIFY] Delivery {delivery.id} ruta (in-order): {[o.get('user') for o in route]}")
-        # aquí puedes integrar con whatsapp_service para enviar imagen de ruta y texto
-        # por ejemplo: whatsapp_service.send_whatsapp_text(delivery_phone, "Tanda asignada...")
-        # y enviar mapa: whatsapp_service.send_whatsapp_text(delivery_phone, "MAP_URL: ...")
+        user_list = [o.get("user") or o.get("user_phone") or o.get("user_number") for o in route]
+        msg = f"Tanda {tanda.id} asignada. {len(route)} pedidos. Ruta (más cercano→más lejano):\n" + \
+              "\n".join([f"- {i+1}) {o.get('user', o.get('user_number',''))} ({o.get('distance_km',0):.2f} km)" for i, o in enumerate(route)])
+        print(f"[NOTIFY] Delivery {delivery.id} ruta (in-order): {user_list}")
+        print("[NOTIFY MESSAGE]:", msg)
+
+        # intentar enviar por WhatsApp
+        try:
+            # import local para evitar ciclos en imports
+            from whatsapp_service import send_whatsapp_text
+            # si delivery.id es teléfono, lo usamos; si no, se puede mapear previamente
+            recipient = delivery.id
+            send_whatsapp_text(recipient, f"📦 *Tanda asignada* (ID: {tanda.id})\n{msg}")
+            # si deseas enviar "mapa", aquí puedes construir una URL y usar otro helper (no incluido por defecto)
+        except Exception as e:
+            print("⚠️ _notify_delivery_route: no se pudo enviar WhatsApp:", e)
 
     # ------------------------
     # Consumir entrega (cuando delivery marca entrega y cliente da código)
@@ -207,7 +239,7 @@ class DeliveryManager:
 
         # primer pedido en inorder (actual)
         current_order = route[0]
-        if current_order.get("code") != order_code:
+        if str(current_order.get("code")).strip().upper() != str(order_code).strip().upper():
             return False
 
         # marcar entregado: removemos el nodo actual de la lista de pedidos (reconstruimos BST sin el entregado)
@@ -218,13 +250,20 @@ class DeliveryManager:
 
         # stats
         delivery.stats["orders_delivered"] += 1
-        # sumar km recorrido: asumimos distancia desde restaurant hasta pedido (ida). double-check real route if needed
-        distance = current_order.get("distance_km", 0.0)
+        distance = float(current_order.get("distance_km", 0.0))
         delivery.stats["km_traveled"] += distance * 2  # ida y vuelta aproximado
         delivery.stats["fuel_liters"] = delivery.stats["km_traveled"] / 10.0
         self.total_delivered += 1
 
         # notificar cliente y pedir calificacion (hook)
+        try:
+            from whatsapp_service import send_whatsapp_text
+            client_phone = current_order.get("user") or current_order.get("user_number") or current_order.get("user_phone")
+            if client_phone:
+                send_whatsapp_text(client_phone, "✅ Tu pedido ha sido entregado. Por favor, califica el servicio del 1 al 5.")
+        except Exception:
+            print("[DELIVERED] no se pudo notificar por WhatsApp al cliente (puede que no exista send_whatsapp_text)")
+
         print(f"[DELIVERED] Order {current_order.get('id')} delivered by {delivery.id}")
 
         # si tanda queda vacía -> marcar delivery disponible y asignar nueva tanda pendiente si existe
@@ -240,27 +279,3 @@ class DeliveryManager:
                     next_tanda.assigned_delivery = delivery.id
                     self._notify_delivery_route(delivery, next_tanda)
         return True
-
-    # ------------------------
-    # Utilitarios / reporting
-    # ------------------------
-    def report(self) -> dict:
-        rep = {
-            "total_delivered": self.total_delivered,
-            "deliveries": {d.id: d.stats for d in self.deliveries.values()},
-            "tandas_pending": list(self.pending_tandas_queue),
-            "zones": {z: self.zones[z].size() for z in self.zones},
-        }
-        return rep
-
-    def get_delivery_status(self, delivery_id: str) -> Optional[dict]:
-        d = self.deliveries.get(delivery_id)
-        if not d:
-            return None
-        return {
-            "id": d.id,
-            "state": d.state,
-            "current_tanda": d.current_tanda_id,
-            "stats": d.stats
-        }
-
