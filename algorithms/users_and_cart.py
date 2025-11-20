@@ -3,15 +3,17 @@
 import time
 from typing import Dict, List, Optional
 
-
 # ============================================================
 #                    MODELO DE USUARIO
 # ============================================================
 
 class User:
     def __init__(self, phone: str):
-        # Número de WhatsApp (nombre unificado)
+
+        # Número de WhatsApp — COMPATIBILIDAD TOTAL
         self.phone = phone
+        self.number = phone   # ← FIX CRÍTICO (lo pide main.py y cart_management.py)
+
         self.created_at = time.time()
 
         # Datos básicos
@@ -73,5 +75,5 @@ class UserManager:
         u.pending_qty = None
 
 
-# Instancia global que usará main.py
-USER_MANAGER = UserManager()
+# Instancia global usada por main.py y catalog_logic.py
+USERS = UserManager()
